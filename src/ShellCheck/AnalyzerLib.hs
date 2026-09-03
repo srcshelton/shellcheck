@@ -216,21 +216,24 @@ makeParameters spec = params
                 Dash -> False
                 BusyboxSh -> False
                 Sh   -> False
-                Ksh  -> True,
+                Ksh  -> True
+                IrixSh -> True,
         hasInheritErrexit =
             case shellType params of
                 Bash -> isOptionSet "inherit_errexit" root
                 Dash -> True
                 BusyboxSh -> True
                 Sh   -> True
-                Ksh  -> False,
+                Ksh  -> False
+                IrixSh -> False,
         hasPipefail =
             case shellType params of
                 Bash -> isOptionSet "pipefail" root
                 Dash -> isOptionSet "pipefail" root
                 BusyboxSh -> isOptionSet "pipefail" root
                 Sh -> isOptionSet "pipefail" root
-                Ksh  -> isOptionSet "pipefail" root,
+                Ksh  -> isOptionSet "pipefail" root
+                IrixSh -> isOptionSet "pipefail" root,
         hasExecfail =
             case shellType params of
                 Bash -> isOptionSet "execfail" root
@@ -246,7 +249,8 @@ makeParameters spec = params
     }
     cfParams = CF.CFGParameters {
         CF.cfLastpipe = hasLastpipe params,
-        CF.cfPipefail = hasPipefail params
+        CF.cfPipefail = hasPipefail params,
+        CF.cfShell = shellType params
     }
     root = asScript spec
 
@@ -314,6 +318,7 @@ prop_determineShell9 = determineShellTest "#!/bin/env -S dash -x" == Dash
 prop_determineShell10 = determineShellTest "#!/bin/env --split-string= dash -x" == Dash
 prop_determineShell11 = determineShellTest "#!/bin/busybox sh" == BusyboxSh -- busybox sh is a specific shell, not posix sh
 prop_determineShell12 = determineShellTest "#!/bin/busybox ash" == BusyboxSh
+prop_determineShell13 = determineShellTest "# shellcheck shell=irix-sh\ntrue" == IrixSh
 
 determineShellTest = determineShellTest' Nothing
 determineShellTest' fallbackShell = determineShell fallbackShell . fromJust . prRoot . pScript
@@ -509,7 +514,7 @@ getVariableFlow params t =
         in mapM_ (\v -> modify (Reference v:)) read
 
     setWritten t =
-        let written = getModifiedVariables t
+        let written = getModifiedVariables params t
         in mapM_ (\v -> modify (Assignment v:)) written
 
 
@@ -521,6 +526,7 @@ leadType params t =
         T_Subshell _ _  -> SubshellScope "(..) group"
         T_BatsTest {} -> SubshellScope "@bats test"
         T_CoProcBody _ _  -> SubshellScope "coproc"
+        T_IrixCoProc _ _  -> SubshellScope "IRIX coprocess"
         T_Redirecting {}  ->
             if causesSubshell == Just True
             then SubshellScope "pipeline"
@@ -539,12 +545,12 @@ leadType params t =
             _:_:_ -> not (hasLastpipe params) || getId (last list) /= getId t
             _ -> False
 
-getModifiedVariables t =
+getModifiedVariables params t =
     case t of
         T_SimpleCommand _ vars [] ->
             [(x, x, name, dataTypeFrom DataString w) | x@(T_Assignment id _ name _ w) <- vars]
         T_SimpleCommand {} ->
-            getModifiedVariableCommand t
+            getModifiedVariableCommand params t
 
         TA_Unary _ op v@(TA_Variable _ name _) | "--" `isInfixOf` op || "++" `isInfixOf` op ->
             [(t, v, name, DataString SourceInteger)]
@@ -642,15 +648,15 @@ getReferencedVariableCommand _ = []
 --   VariableName :: String,   -- The variable name, i.e. foo
 --   VariableValue :: DataType -- A description of the value being assigned, i.e. "Literal string with value foo"
 -- )
-getModifiedVariableCommand base@(T_SimpleCommand id cmdPrefix (T_NormalWord _ (T_Literal _ x:_):rest)) =
+getModifiedVariableCommand params base@(T_SimpleCommand id cmdPrefix (T_NormalWord _ (T_Literal _ x:_):rest)) =
    filter (\(_,_,s,_) -> not ("-" `isPrefixOf` s)) $
     case x of
         "builtin" ->
-            getModifiedVariableCommand $ T_SimpleCommand id cmdPrefix rest
+            getModifiedVariableCommand params $ T_SimpleCommand id cmdPrefix rest
         "read" ->
             let fallback = catMaybes $ takeWhile isJust (reverse $ map getLiteral rest)
             in fromMaybe fallback $ do
-                parsed <- getGnuOpts flagsForRead rest
+                parsed <- getGnuOpts (flagsForReadFor $ shellType params) rest
                 case lookup "a" parsed of
                     Just (_, var) -> (:[]) <$> getLiteralArray var
                     Nothing -> return $ catMaybes $
@@ -674,9 +680,12 @@ getModifiedVariableCommand base@(T_SimpleCommand id cmdPrefix (T_NormalWord _ (T
             if any (`elem` flags) ["f", "p"]
             then []
             else concatMap getModifierParamString rest
-        "set" -> maybeToList $ do
-            params <- getSetParams rest
-            return (base, base, "@", DataString $ SourceFrom params)
+        "set" ->
+            if shellType params == IrixSh
+            then case getIrixArray rest of
+                    Just array -> [array]
+                    Nothing -> positionalParameters
+            else positionalParameters
 
         "printf" -> maybeToList $ getPrintfVariable rest
         "wait" ->   maybeToList $ getWaitVariable rest
@@ -692,6 +701,16 @@ getModifiedVariableCommand base@(T_SimpleCommand id cmdPrefix (T_NormalWord _ (T
         _ -> []
   where
     flags = map snd $ getAllFlags base
+    positionalParameters = maybeToList $ do
+        values <- getSetParams rest
+        return (base, base, "@", DataString $ SourceFrom values)
+
+    getIrixArray (flag:name:values) = do
+        guard $ getLiteralString flag == Just "-A"
+        variable <- getLiteralString name
+        guard $ isVariableName variable
+        return (base, name, variable, DataArray $ SourceFrom values)
+    getIrixArray _ = Nothing
     stripEquals s = drop 1 $ dropWhile (/= '=') s
     stripEqualsFrom (T_NormalWord id1 (T_Literal id2 s:rs)) =
         T_NormalWord id1 (T_Literal id2 (stripEquals s):rs)
@@ -779,7 +798,7 @@ getModifiedVariableCommand base@(T_SimpleCommand id cmdPrefix (T_NormalWord _ (T
         return (base, n, "FLAGS_" ++ name, DataString $ SourceExternal)
     getFlagVariable _ = Nothing
 
-getModifiedVariableCommand _ = []
+getModifiedVariableCommand _ _ = []
 
 -- Given a NormalWord like foo or foo[$bar], get foo.
 -- Primarily used to get references for [[ -v foo[bar] ]]
@@ -926,6 +945,7 @@ isQuotedAlternativeReference t =
 
 supportsArrays Bash = True
 supportsArrays Ksh = True
+supportsArrays IrixSh = True
 supportsArrays _ = False
 
 isTrueAssignmentSource c =

@@ -817,13 +817,13 @@ prop_checkReadExpansions8 = verifyNot checkReadExpansions "read ${var?}"
 prop_checkReadExpansions9 = verify checkReadExpansions "read arr[val]"
 checkReadExpansions = CommandCheck (Exactly "read") check
   where
-    options = getGnuOpts flagsForRead
-    getVars cmd = fromMaybe [] $ do
-        opts <- options $ arguments cmd
+    getVars shell cmd = fromMaybe [] $ do
+        opts <- getGnuOpts (flagsForReadFor shell) $ arguments cmd
         return [y | (x,(_, y)) <- opts, null x || x == "a"]
 
     check cmd = do
-        mapM_ dollarWarning $ getVars cmd
+        shell <- asks shellType
+        mapM_ dollarWarning $ getVars shell cmd
         mapM_ arrayWarning $ arguments cmd
 
     dollarWarning t = sequence_ $ do

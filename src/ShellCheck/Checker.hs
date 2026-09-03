@@ -210,6 +210,48 @@ prop_doesNotReportRcSuppressionsAsUnused = null result
         csIgnoreRC = False
     }
 
+checkIrix src =
+    getErrors
+        (mockedSystemInterface [])
+        emptyCheckSpec {
+            csScript = src,
+            csExcludedWarnings = [2148],
+            csShellTypeOverride = Just IrixSh
+        }
+
+prop_irixAcceptsBraceCase =
+    null $ intersect [1072, 1073] $ checkIrix "case value {\nvalue) echo yes;;\n}"
+prop_irixAcceptsTrailingCoprocess =
+    2118 `notElem` checkIrix "print value |&\nread -p result"
+prop_irixTracksReadPCoprocessVariable =
+    2154 `notElem` checkIrix "print value |&\nread -p result\necho \"$result\""
+prop_irixRejectsStderrPipeInterpretation =
+    2118 `elem` checkIrix "print value |& sed 's/value/result/'"
+prop_irixAcceptsDynamicUnaryOperator =
+    null $ intersect [1072, 1073] $ checkIrix "LTEST=-d\n[ $LTEST path ]"
+prop_irixAcceptsLowercaseLinkOperator =
+    2058 `notElem` checkIrix "[ -l path ]"
+prop_irixAcceptsVariableOutputFds =
+    2261 `notElem` checkIrix "OUTPUTFD=1\ncommand >&$OUTPUTFD 2>&$OUTPUTFD"
+prop_irixAcceptsElseIf =
+    1075 `notElem` checkIrix "if false; then true; else if true; then echo nested; fi; fi"
+prop_irixTracksSetAArrayAssignments =
+    2154 `notElem` checkIrix "set -A values zero one two\necho \"${values[1]}\""
+prop_irixAcceptsBareIntegerVariables =
+    null $ intersect [2050, 2170] $ checkIrix "typeset -i index=1\n[ index -eq 1 ]"
+prop_irixAcceptsLegacyBackticks =
+    3068 `notElem` checkIrix "value=`echo hi`"
+prop_irixRejectsDollarCommandSubstitution =
+    3068 `elem` checkIrix "value=$(echo hi)"
+prop_irixStillFindsConstantComparison =
+    2050 `elem` checkIrix "[ \"FA_PORT\" = \"80\" ]"
+prop_irixStillFindsConstantNullaryTest =
+    2078 `elem` checkIrix "[ CONNTYPE ]"
+prop_irixWorkaroundsBecomeUnused =
+    [2337, 2337] == result
+  where
+    result = check "# shellcheck shell=irix-sh enable=check-unused-suppressions\n# shellcheck disable=SC1072,SC1073\ncase \"$1\" {\nvalue) true;;\n}"
+
 prop_optionDisablesIssue1 =
     null $ getErrors
                 (mockedSystemInterface [])

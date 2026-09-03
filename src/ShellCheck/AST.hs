@@ -55,6 +55,7 @@ data InnerToken t =
     | Inner_TC_Nullary ConditionType t
     | Inner_TC_Or ConditionType String t t
     | Inner_TC_Unary ConditionType String t
+    | Inner_TC_DynamicUnary ConditionType t t
     | Inner_TC_Empty ConditionType
     | Inner_T_AND_IF
     | Inner_T_AndIf t t
@@ -141,6 +142,7 @@ data InnerToken t =
     | Inner_T_Pipe String
     | Inner_T_CoProc (Maybe Token) t
     | Inner_T_CoProcBody t
+    | Inner_T_IrixCoProc t
     | Inner_T_Include t
     | Inner_T_SourceCommand t t
     | Inner_T_BatsTest String t
@@ -227,8 +229,10 @@ pattern TC_Nullary id typ token = OuterToken id (Inner_TC_Nullary typ token)
 pattern T_Condition id typ token = OuterToken id (Inner_T_Condition typ token)
 pattern T_CoProcBody id t = OuterToken id (Inner_T_CoProcBody t)
 pattern T_CoProc id var body = OuterToken id (Inner_T_CoProc var body)
+pattern T_IrixCoProc id body = OuterToken id (Inner_T_IrixCoProc body)
 pattern TC_Or id typ str t1 t2 = OuterToken id (Inner_TC_Or typ str t1 t2)
 pattern TC_Unary id typ op token = OuterToken id (Inner_TC_Unary typ op token)
+pattern TC_DynamicUnary id typ op token = OuterToken id (Inner_TC_DynamicUnary typ op token)
 pattern T_DollarArithmetic id c = OuterToken id (Inner_T_DollarArithmetic c)
 pattern T_DollarBraceCommandExpansion id pipe list = OuterToken id (Inner_T_DollarBraceCommandExpansion pipe list)
 pattern T_DollarBraced id braced op = OuterToken id (Inner_T_DollarBraced braced op)
@@ -261,7 +265,7 @@ pattern T_Subshell id l = OuterToken id (Inner_T_Subshell l)
 pattern T_UntilExpression id c l = OuterToken id (Inner_T_UntilExpression c l)
 pattern T_WhileExpression id c l = OuterToken id (Inner_T_WhileExpression c l)
 
-{-# COMPLETE T_AND_IF, T_Bang, T_Case, TC_Empty, T_CLOBBER, T_DGREAT, T_DLESS, T_DLESSDASH, T_Do, T_DollarSingleQuoted, T_Done, T_DSEMI, T_Elif, T_Else, T_EOF, T_Esac, T_Fi, T_For, T_Glob, T_GREATAND, T_Greater, T_If, T_In, T_Lbrace, T_Less, T_LESSAND, T_LESSGREAT, T_Literal, T_Lparen, T_NEWLINE, T_OR_IF, T_ParamSubSpecialChar, T_Pipe, T_Rbrace, T_Rparen, T_Select, T_Semi, T_SingleQuoted, T_Then, T_UnparsedIndex, T_Until, T_While, TA_Assignment, TA_Binary, TA_Expansion, T_AndIf, T_Annotation, T_Arithmetic, T_Array, TA_Sequence, TA_Parenthesis, T_Assignment, TA_Trinary, TA_Unary, TA_Variable, T_Backgrounded, T_Backticked, T_Banged, T_BatsTest, T_BraceExpansion, T_BraceGroup, TC_And, T_CaseExpression, TC_Binary, TC_Group, TC_Nullary, T_Condition, T_CoProcBody, T_CoProc, TC_Or, TC_Unary, T_DollarArithmetic, T_DollarBraceCommandExpansion, T_DollarBraced, T_DollarBracket, T_DollarDoubleQuoted, T_DollarExpansion, T_DoubleQuoted, T_Extglob, T_FdRedirect, T_ForArithmetic, T_ForIn, T_Function, T_HereDoc, T_HereString, T_IfExpression, T_Include, T_IndexedElement, T_IoDuplicate, T_IoFile, T_NormalWord, T_OrIf, T_Pipeline, T_ProcSub, T_Redirecting, T_Script, T_SelectIn, T_SimpleCommand, T_SourceCommand, T_Subshell, T_UntilExpression, T_WhileExpression #-}
+{-# COMPLETE T_AND_IF, T_Bang, T_Case, TC_Empty, T_CLOBBER, T_DGREAT, T_DLESS, T_DLESSDASH, T_Do, T_DollarSingleQuoted, T_Done, T_DSEMI, T_Elif, T_Else, T_EOF, T_Esac, T_Fi, T_For, T_Glob, T_GREATAND, T_Greater, T_If, T_In, T_Lbrace, T_Less, T_LESSAND, T_LESSGREAT, T_Literal, T_Lparen, T_NEWLINE, T_OR_IF, T_ParamSubSpecialChar, T_Pipe, T_Rbrace, T_Rparen, T_Select, T_Semi, T_SingleQuoted, T_Then, T_UnparsedIndex, T_Until, T_While, TA_Assignment, TA_Binary, TA_Expansion, T_AndIf, T_Annotation, T_Arithmetic, T_Array, TA_Sequence, TA_Parenthesis, T_Assignment, TA_Trinary, TA_Unary, TA_Variable, T_Backgrounded, T_Backticked, T_Banged, T_BatsTest, T_BraceExpansion, T_BraceGroup, TC_And, T_CaseExpression, TC_Binary, TC_DynamicUnary, TC_Group, TC_Nullary, T_Condition, T_CoProcBody, T_CoProc, T_IrixCoProc, TC_Or, TC_Unary, T_DollarArithmetic, T_DollarBraceCommandExpansion, T_DollarBraced, T_DollarBracket, T_DollarDoubleQuoted, T_DollarExpansion, T_DoubleQuoted, T_Extglob, T_FdRedirect, T_ForArithmetic, T_ForIn, T_Function, T_HereDoc, T_HereString, T_IfExpression, T_Include, T_IndexedElement, T_IoDuplicate, T_IoFile, T_NormalWord, T_OrIf, T_Pipeline, T_ProcSub, T_Redirecting, T_Script, T_SelectIn, T_SimpleCommand, T_SourceCommand, T_Subshell, T_UntilExpression, T_WhileExpression #-}
 
 instance Eq Token where
     OuterToken _ a == OuterToken _ b = a == b
@@ -287,4 +291,3 @@ doStackAnalysis :: Monad m => (Token -> m ()) -> (Token -> m ()) -> Token -> m T
 doStackAnalysis startToken endToken = analyze startToken endToken return
 doTransform :: (Token -> Token) -> Token -> Token
 doTransform i = runIdentity . analyze blank blank (return . i)
-

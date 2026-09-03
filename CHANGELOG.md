@@ -12,6 +12,8 @@
   between `#!` and the interpreter.
 - SC2343: Optional `require-variable-quotes` suggestion for consistently
   double quoting variable expansions where quoting preserves their role.
+- SC3068: IRIX sh does not perform command substitution for `$(..)`, even
+  though it accepts the text syntactically; use legacy backticks.
 
 ### Changed
 

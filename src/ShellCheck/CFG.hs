@@ -168,7 +168,9 @@ data CFGParameters = CFGParameters {
     -- Whether the last element in a pipeline runs in the current shell
     cfLastpipe :: Bool,
     -- Whether all elements in a pipeline count towards the exit status
-    cfPipefail :: Bool
+    cfPipefail :: Bool,
+    -- The shell dialect whose builtins are being modelled
+    cfShell :: Shell
 }
 
 data CFGResult = CFGResult {
@@ -559,6 +561,8 @@ build t = do
         TC_Unary _ _ op arg -> do
             build arg
 
+        TC_DynamicUnary _ _ op arg -> sequentially [op, arg]
+
         T_Arithmetic id root -> do
             exe <- build root
             status <- newNodeRange (CFSetExitCode id)
@@ -690,6 +694,12 @@ build t = do
 
             return $ spanRange start end
         T_CoProcBody _ t -> build t
+
+        T_IrixCoProc id t -> do
+            start <- newStructuralNode
+            child <- subshell id "IRIX coprocess" $ build t
+            status <- newNodeRange $ CFSetExitCode id
+            linkRanges [start, child, status]
 
         T_DollarArithmetic _ arith -> build arith
         T_DollarDoubleQuoted _ list -> sequentially list
@@ -1137,10 +1147,12 @@ handleCommand cmd vars args literalCmd = do
             guard $ isVariableName name
             return (getId c, name)
 
-    handleRead (cmd NE.:| args) = newNodeRange $ CFApplyEffects main
+    handleRead (cmd NE.:| args) = do
+        shell <- reader $ cfShell . cfParameters
+        newNodeRange $ CFApplyEffects $ main shell
       where
-        main = fromMaybe fallback $ do
-            flags <- getGnuOpts flagsForRead args
+        main shell = fromMaybe fallback $ do
+            flags <- getGnuOpts (flagsForReadFor shell) args
             return $ fromMaybe (withFields flags) $ withArray flags
 
         withArray :: [(String, (Token, Token))] -> Maybe [IdTagged CFEffect]

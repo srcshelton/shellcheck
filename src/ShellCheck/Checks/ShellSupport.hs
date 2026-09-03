@@ -64,6 +64,7 @@ checks = [
     ,checkMultipleBangs
     ,checkBangAfterPipe
     ,checkNegatedUnaryOps
+    ,checkIrixCommandSubstitution
     ]
 
 testChecker (ForShell _ t) =
@@ -83,6 +84,15 @@ checkForDecimals = ForShell [Sh, Dash, BusyboxSh, Bash] f
         first:rest <- getLiteralString t
         guard $ isDigit first && '.' `elem` rest
         return $ err id 2079 "(( )) doesn't support decimals. Use bc or awk."
+    f _ = return ()
+
+
+prop_checkIrixCommandSubstitution1 = verify checkIrixCommandSubstitution "value=$(echo hi)"
+prop_checkIrixCommandSubstitution2 = verifyNot checkIrixCommandSubstitution "value=`echo hi`"
+checkIrixCommandSubstitution = ForShell [IrixSh] f
+  where
+    f (T_DollarExpansion id _) =
+        err id 3068 "In IRIX sh, $(..) is not command substitution. Use legacy backticks."
     f _ = return ()
 
 

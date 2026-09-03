@@ -317,6 +317,14 @@ getCurrentAnnotations includeSource =
     isBoundary (ContextSource _) = not includeSource
     isBoundary _ = False
 
+isIrixShell = do
+    flagShell <- Mr.asks shellTypeOverride
+    annotations <- getCurrentAnnotations False
+    let annotatedShell = listToMaybe $ do
+            ShellOverride name <- annotations
+            maybeToList $ shellForExecutable name
+    return $ (flagShell `mplus` annotatedShell) == Just IrixSh
+
 
 shouldFollow file = do
     context <- getCurrentContexts
@@ -490,8 +498,12 @@ readConditionContents single =
                                 pos <- getPosition
                                 s <- readVariableName
                                 spacing1
-                                when (s `elem` commonCommands) $
-                                    parseProblemAt pos WarningC 1014 "Use 'if cmd; then ..' to check exit code, or 'if [[ $(cmd) == .. ]]' to check output.")
+                                when (s `elem` commonCommands) $ do
+                                    irix <- isIrixShell
+                                    parseProblemAt pos WarningC 1014 $
+                                        if irix
+                                        then "Use 'if cmd; then ..' to check exit code, or compare the output from legacy backticks."
+                                        else "Use 'if cmd; then ..' to check exit code, or 'if [[ $(cmd) == .. ]]' to check output.")
 
   where
     spacingOrLf = condSpacing True
@@ -726,8 +738,23 @@ readConditionContents single =
         expr <- readCondExpr
         return $ TC_Unary id typ "!" expr
 
+    readCondDynamicUnaryExp = try $ do
+        irix <- isIrixShell
+        guard $ irix && single
+        start <- startSpan
+        op <- readCondWord
+        guard $ isDynamicOperator op
+        arg <- readCondWord
+        lookAhead $ string "]"
+        id <- endSpan start
+        return $ TC_DynamicUnary id typ op arg
+      where
+        isDynamicOperator (T_NormalWord _ [part]) =
+            isJust $ getUnmodifiedParameterExpansion part
+        isDynamicOperator _ = False
+
     readCondExpr =
-      readCondGroup <|> readCondUnaryExp <|> readCondNullaryOrBinary
+      readCondGroup <|> readCondUnaryExp <|> readCondDynamicUnaryExp <|> readCondNullaryOrBinary
 
     readCondOr = chainl1 readCondAnd readCondAndOp
     readCondAnd = chainl1 readCondTerm readCondOrOp
@@ -971,6 +998,8 @@ prop_readCondition26 = isOk readScript "[[ foo ]]\\\n && bar"
 prop_readCondition27 = not $ isOk readConditionCommand "[[ x ]] foo"
 prop_readCondition28 = isOk readCondition "[[ x = [\"$1\"] ]]"
 prop_readCondition29 = isOk readCondition "[[ x = [*] ]]"
+prop_readConditionIrixDynamicUnary = isOk readScript "# shellcheck shell=irix-sh\nLTEST=-d\n[ $LTEST path ]\n"
+prop_readConditionRejectsDynamicUnary = isNotOk readScript "# shellcheck shell=sh\nLTEST=-d\n[ $LTEST path ]\n"
 
 readCondition = called "test expression" $ do
     opos <- getPosition
@@ -1354,8 +1383,11 @@ readBackTicked quoted = called "backtick expansion" $ do
       void (char '`') <|> do
          pos <- getPosition
          char '´'
-         parseProblemAt pos ErrorC 1077
-            "For command expansion, the tick should slant left (` vs ´). Use $(..) instead."
+         irix <- isIrixShell
+         parseProblemAt pos ErrorC 1077 $
+            if irix
+            then "For command expansion, the tick should slant left (` vs ´)."
+            else "For command expansion, the tick should slant left (` vs ´). Use $(..) instead."
 
 -- Run a parser on a new input, such as for `..` or here documents.
 subParse pos parser input = do
@@ -1666,8 +1698,12 @@ readDollarExpression = do
 
 readDollarExp = arithmetic <|> readDollarExpansion <|> readDollarBracket <|> readDollarBraceCommandExpansion <|> readDollarBraced <|> readDollarVariable
   where
-    arithmetic = readAmbiguous "$((" readDollarArithmetic readDollarExpansion (\pos ->
-        parseNoteAt pos ErrorC 1102 "Shells disambiguate $(( differently or not at all. For $(command substitution), add space after $( . For $((arithmetics)), fix parsing errors.")
+    arithmetic = readAmbiguous "$((" readDollarArithmetic readDollarExpansion (\pos -> do
+        irix <- isIrixShell
+        parseNoteAt pos ErrorC 1102 $
+            if irix
+            then "IRIX sh does not implement $(command substitution). For $((arithmetics)), fix the parsing errors."
+            else "Shells disambiguate $(( differently or not at all. For $(command substitution), add space after $( . For $((arithmetics)), fix parsing errors.")
 
 prop_readDollarSingleQuote = isOk readDollarSingleQuote "$'foo\\\'lol'"
 readDollarSingleQuote = called "$'..' expression" $ do
@@ -2101,7 +2137,7 @@ prop_readSeparator3 = isWarning readScript "a &amp; b"
 prop_readSeparator4 = isWarning readScript "a &gt; file; b"
 prop_readSeparator5 = isWarning readScript "curl https://example.com/?foo=moo&bar=cow"
 readSeparatorOp = do
-    notFollowedBy2 (void g_AND_IF <|> void readCaseSeparator)
+    notFollowedBy2 (void g_AND_IF <|> void readExplicitCaseSeparator)
     notFollowedBy2 (string "&>")
     start <- getPosition
     f <- try (do
@@ -2346,6 +2382,8 @@ prop_readPipeline2 = isWarning readPipeline "!cat /etc/issue | grep -i ubuntu"
 prop_readPipeline3 = isOk readPipeline "for f; do :; done|cat"
 prop_readPipeline4 = isOk readPipeline "! ! true"
 prop_readPipeline5 = isOk readPipeline "true | ! true"
+prop_readPipelineIrixCoprocess = isOk readScript "# shellcheck shell=irix-sh\nprint coprocess |&\nread -p value\n"
+prop_readPipelineIrixPipelineCoprocess = isOk readScript "# shellcheck shell=irix-sh\ngrep first file | grep second |&\nread -p value\n"
 readPipeline = do
     unexpecting "keyword/token" readKeyword
     readBanged readPipeSequence
@@ -2409,7 +2447,40 @@ readTerm = do
         transformWithSeparator i _  = id
 
 
-readPipeSequence = do
+readPipeSequence = try readIrixCoprocess <|> readRegularPipeSequence
+
+readIrixCoprocess = do
+    irix <- isIrixShell
+    guard irix
+    start <- startSpan
+    (cmds, pipes) <- sepBy1WithSeparators (readBanged readCommand) readOrdinaryPipe
+    pipe <- readPipe
+    guard $ pipe == T_Pipe (getId pipe) "|&"
+    lookAhead $ void (oneOf ";\n") <|> eof
+    id <- endSpan start
+    bodyId <- getNewIdFor id
+    cmd <- case cmds of
+        [single] -> return single
+        _ -> do
+            pipelineId <- getNextIdSpanningTokenList cmds
+            return $ T_Pipeline pipelineId pipes cmds
+    spacing
+    return $ T_IrixCoProc id (T_CoProcBody bodyId cmd)
+  where
+    readOrdinaryPipe = try $ do
+        pipe <- readPipe
+        guard $ pipe /= T_Pipe (getId pipe) "|&"
+        readLineBreak
+        return pipe
+
+    sepBy1WithSeparators p s = do
+        let elems = (\x -> ([x], [])) <$> p
+        let seps = do
+            separator <- s
+            return $ \(a,b) (c,d) -> (a++c, b ++ d ++ [separator])
+        elems `chainl1` seps
+
+readRegularPipeSequence = do
     start <- startSpan
     (cmds, pipes) <- sepBy1WithSeparators (readBanged readCommand)
                         (readPipe `thenSkip` (spacing >> readLineBreak))
@@ -2469,6 +2540,7 @@ prop_readIfClause3 = isWarning readIfClause "if false; then true; else; echo lol
 prop_readIfClause4 = isWarning readIfClause "if false; then true; else if true; then echo lol; fi; fi"
 prop_readIfClause5 = isOk readIfClause "if false; then true; else\nif true; then echo lol; fi; fi"
 prop_readIfClause6 = isWarning readIfClause "if true\nthen\nDo the thing\nfi"
+prop_readIfClauseIrixElseIf = isOk readScript "# shellcheck shell=irix-sh\nif false; then true; else if true; then echo nested; fi; fi\n"
 readIfClause = called "if expression" $ do
     start <- startSpan
     pos <- getPosition
@@ -2529,9 +2601,11 @@ readElifPart = called "elif clause" $ do
 readElsePart = called "else clause" $ do
     pos <- getPosition
     g_Else
-    optional $ do
-        try . lookAhead $ g_If
-        parseProblemAt pos ErrorC 1075 "Use 'elif' instead of 'else if' (or put 'if' on new line if nesting)."
+    irix <- isIrixShell
+    unless irix $
+        optional $ do
+            try . lookAhead $ g_If
+            parseProblemAt pos ErrorC 1075 "Use 'elif' instead of 'else if' (or put 'if' on new line if nesting)."
 
     acceptButWarn g_Semi ErrorC 1053 "Semicolons directly after 'else' are not allowed. Just remove it."
     allspacing
@@ -2739,22 +2813,37 @@ prop_readCaseClause3 = isOk readCaseClause "case foo\n in * ) echo bar & ;; esac
 prop_readCaseClause4 = isOk readCaseClause "case foo\n in *) echo bar ;& bar) foo; esac"
 prop_readCaseClause5 = isOk readCaseClause "case foo\n in *) echo bar;;& foo) baz;; esac"
 prop_readCaseClause6 = isOk readCaseClause "case foo\n in if) :;; done) :;; esac"
+prop_readCaseClauseIrixBraces = isOk readScript "# shellcheck shell=irix-sh\ncase foo {\nfoo) echo bar;;\n}\n"
+prop_readCaseClauseRejectsIrixBraces = isNotOk readScript "# shellcheck shell=sh\ncase foo {\nfoo) echo bar;;\n}\n"
 readCaseClause = called "case expression" $ do
     start <- startSpan
     g_Case
     word <- readNormalWord
     allspacing
-    g_In <|> fail "Expected 'in'"
-    readLineBreak
-    list <- readCaseList
-    g_Esac <|> fail "Expected 'esac' to close the case statement"
+    irix <- isIrixShell
+    list <- if irix
+            then try readIrixCase <|> readRegularCase
+            else readRegularCase
     id <- endSpan start
     return $ T_CaseExpression id word list
+  where
+    readRegularCase = do
+        g_In <|> fail "Expected 'in'"
+        readLineBreak
+        list <- readCaseList g_Esac
+        g_Esac <|> fail "Expected 'esac' to close the case statement"
+        return list
+    readIrixCase = do
+        g_Lbrace <|> fail "Expected '{' to open the IRIX case statement"
+        readLineBreak
+        list <- readCaseList g_Rbrace
+        g_Rbrace <|> fail "Expected '}' to close the IRIX case statement"
+        return list
 
-readCaseList = many readCaseItem
+readCaseList end = many $ readCaseItem end
 
-readCaseItem = called "case item" $ do
-    notFollowedBy2 g_Esac
+readCaseItem end = called "case item" $ do
+    notFollowedBy2 end
     optional $ do
         try . lookAhead $ readAnnotationPrefix
         parseProblem ErrorC 1124 "ShellCheck directives are only valid in front of complete commands like 'case' statements, not individual case branches."
@@ -2766,8 +2855,8 @@ readCaseItem = called "case item" $ do
             "Did you forget to move the ;; after extending this case item?"
         fail "Expected ) to open a new case item"
     readLineBreak
-    list <- (lookAhead readCaseSeparator >> return []) <|> readCompoundList
-    separator <- readCaseSeparator `attempting` do
+    list <- (lookAhead (readCaseSeparator end) >> return []) <|> readCompoundList
+    separator <- readCaseSeparator end `attempting` do
         pos <- getPosition
         lookAhead g_Rparen
         parseProblemAt pos ErrorC 1074
@@ -2775,11 +2864,15 @@ readCaseItem = called "case item" $ do
     readLineBreak
     return (separator, pattern', list)
 
-readCaseSeparator = choice [
+readExplicitCaseSeparator = choice [
     tryToken ";;&" (const ()) >> return CaseContinue,
     tryToken ";&" (const ()) >> return CaseFallThrough,
-    g_DSEMI >> return CaseBreak,
-    lookAhead (readLineBreak >> g_Esac) >> return CaseBreak
+    g_DSEMI >> return CaseBreak
+    ]
+
+readCaseSeparator end = choice [
+    readExplicitCaseSeparator,
+    lookAhead (readLineBreak >> end) >> return CaseBreak
     ]
 
 prop_readFunctionDefinition = isOk readFunctionDefinition "foo() { command foo --lol \"$@\"; }"
@@ -3412,8 +3505,8 @@ readScriptFile sourced = do
     verifyShebang pos s = do
         case isValidShell s of
             Just True -> return ()
-            Just False -> parseProblemAt pos ErrorC 1071 "ShellCheck only supports sh/bash/dash/ksh/'busybox sh' scripts. Sorry!"
-            Nothing -> parseProblemAt pos ErrorC 1008 "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'. Add a 'shell' directive to specify."
+            Just False -> parseProblemAt pos ErrorC 1071 "ShellCheck only supports sh/bash/dash/ksh/'busybox sh'/irix-sh scripts. Sorry!"
+            Nothing -> parseProblemAt pos ErrorC 1008 "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'/irix-sh. Add a 'shell' directive to specify."
 
     isValidShell s =
         let good = null s || any (`isPrefixOf` s) goodShells
@@ -3433,7 +3526,8 @@ readScriptFile sourced = do
         "bash",
         "bats",
         "ksh",
-        "oksh"
+        "oksh",
+        "irix-sh"
         ]
     badShells = [
         "awk",

@@ -503,8 +503,9 @@ checkEchoWc _ _ = return ()
 prop_checkPipedAssignment1 = verify checkPipedAssignment "A=ls | grep foo"
 prop_checkPipedAssignment2 = verifyNot checkPipedAssignment "A=foo cmd | grep foo"
 prop_checkPipedAssignment3 = verifyNot checkPipedAssignment "A=foo"
-checkPipedAssignment _ (T_Pipeline _ _ (T_Redirecting _ _ (T_SimpleCommand id (_:_) []):_:_)) =
-    warn id 2036 "If you wanted to assign the output of the pipeline, use a=$(b | c) ."
+checkPipedAssignment params (T_Pipeline _ _ (T_Redirecting _ _ (T_SimpleCommand id (_:_) []):_:_)) =
+    warn id 2036 $ "If you wanted to assign the output of the pipeline, use a=" ++
+        commandSubstitution params "b | c" ++ " ."
 checkPipedAssignment _ _ = return ()
 
 prop_checkAssignAteCommand1 = verify checkAssignAteCommand "A=ls -l"
@@ -514,15 +515,17 @@ prop_checkAssignAteCommand4 = verifyNot checkAssignAteCommand "A=foo ls -l"
 prop_checkAssignAteCommand5 = verify checkAssignAteCommand "PAGER=cat grep bar"
 prop_checkAssignAteCommand6 = verifyNot checkAssignAteCommand "PAGER=\"cat\" grep bar"
 prop_checkAssignAteCommand7 = verify checkAssignAteCommand "here=pwd"
-checkAssignAteCommand _ (T_SimpleCommand id [T_Assignment _ _ _ _ assignmentTerm] list) =
+checkAssignAteCommand params (T_SimpleCommand id [T_Assignment _ _ _ _ assignmentTerm] list) =
     -- Check if first word is intended as an argument (flag or glob).
     if firstWordIsArg list
     then
-        err id 2037 "To assign the output of a command, use var=$(cmd) ."
+        err id 2037 $ "To assign the output of a command, use var=" ++
+            commandSubstitution params "cmd" ++ " ."
     else
         -- Check if it's a known, unquoted command name.
         when (isCommonCommand $ getUnquotedLiteral assignmentTerm) $
-            warn id 2209 "Use var=$(command) to assign output (or quote to assign string)."
+            warn id 2209 $ "Use var=" ++ commandSubstitution params "command" ++
+                " to assign output (or quote to assign string)."
   where
     isCommonCommand (Just s) = s `elem` commonCommands
     isCommonCommand _ = False
@@ -530,6 +533,10 @@ checkAssignAteCommand _ (T_SimpleCommand id [T_Assignment _ _ _ _ assignmentTerm
     firstWordIsArg [] = False
 
 checkAssignAteCommand _ _ = return ()
+
+commandSubstitution params command
+    | shellType params == IrixSh = "`" ++ command ++ "`"
+    | otherwise = "$(" ++ command ++ ")"
 
 prop_checkArithmeticOpCommand1 = verify checkArithmeticOpCommand "i=i + 1"
 prop_checkArithmeticOpCommand2 = verify checkArithmeticOpCommand "foo=bar * 2"
@@ -739,8 +746,9 @@ checkForInQuoted _ (T_ForIn _ f [T_NormalWord _ [word@(T_DoubleQuoted id list)]]
     | any willSplit list && not (mayBecomeMultipleArgs word)
             || maybe False wouldHaveBeenGlob (getLiteralString word) =
         err id 2066 "Since you double quoted this, it will not word split, and the loop will only run once."
-checkForInQuoted _ (T_ForIn _ f [T_NormalWord _ [T_SingleQuoted id _]] _) =
-    warn id 2041 "This is a literal string. To run as a command, use $(..) instead of '..' . "
+checkForInQuoted params (T_ForIn _ f [T_NormalWord _ [T_SingleQuoted id _]] _) =
+    warn id 2041 $ "This is a literal string. To run as a command, use " ++
+        commandSubstitution params ".." ++ " instead of '..' . "
 checkForInQuoted _ (T_ForIn _ _ [single] _)
     | maybe False (',' `elem`) $ getUnquotedLiteral single =
         warn (getId single) 2042 "Use spaces, not commas, to separate loop elements."
@@ -1243,6 +1251,7 @@ prop_checkNumberComparisons22 = verify checkNumberComparisons "x=10; [[ $x > $z 
 prop_checkNumberComparisons23 = verify checkNumberComparisons "x=0; if [[ -n $def ]]; then x=$def; fi; while [ $x > $z ]; do lol; done"
 prop_checkNumberComparisons24 = verify checkNumberComparisons "x=$RANDOM; [ $x > $z ]"
 prop_checkNumberComparisons25 = verify checkNumberComparisons "[[ $((n++)) > $x ]]"
+prop_checkNumberComparisonsIrixInteger = verifyNot checkNumberComparisons "# shellcheck shell=irix-sh\ntypeset -i index=1\n[ index -eq 1 ]"
 
 checkNumberComparisons params (TC_Binary id typ op lhs rhs) = do
     if isNum lhs || isNum rhs
@@ -1291,7 +1300,7 @@ checkNumberComparisons params (TC_Binary id typ op lhs rhs) = do
             kind = if isVar then "a variable" else "an arithmetic expression"
             fix = if isVar then "$var" else "$((expr))"
         in
-            when (isNonNum t) $
+            when (isNonNum t && not (isIrixIntegerVariable params t)) $
                 if typ == SingleBracket
                 then
                     err (getId t) 2170 $
@@ -1450,7 +1459,8 @@ prop_checkConstantIfs9 = verify checkConstantIfs "[[ *.png == [a-z] ]]"
 prop_checkConstantIfs10 = verifyNot checkConstantIfs "[[ ~me == ~+ ]]"
 prop_checkConstantIfs11 = verifyNot checkConstantIfs "[[ ~ == ~+ ]]"
 prop_checkConstantIfs12 = verify checkConstantIfs "[[ '~' == x ]]"
-checkConstantIfs _ (TC_Binary id typ op lhs rhs) | not isDynamic =
+prop_checkConstantIfsIrixInteger = verifyNot checkConstantIfs "# shellcheck shell=irix-sh\ntypeset -i index=1\n[ index -eq 1 ]"
+checkConstantIfs params (TC_Binary id typ op lhs rhs) | not isDynamic =
     if isConstant lhs && isConstant rhs
         then  warn id 2050 "This expression is constant. Did you forget the $ on a variable?"
         else checkUnmatchable id op lhs rhs
@@ -1458,12 +1468,22 @@ checkConstantIfs _ (TC_Binary id typ op lhs rhs) | not isDynamic =
     isDynamic =
         op `elem` arithmeticBinaryTestOps
             && typ == DoubleBracket
+        || op `elem` arithmeticBinaryTestOps
+            && any (isIrixIntegerVariable params) [lhs, rhs]
         || op `elem` [ "-nt", "-ot", "-ef"]
 
     checkUnmatchable id op lhs rhs =
         when (op `elem` ["=", "==", "!="] && not (wordsCanBeEqual lhs rhs)) $
             warn id 2193 "The arguments to this comparison can never be equal. Make sure your syntax is correct."
 checkConstantIfs _ _ = return ()
+
+isIrixIntegerVariable params token =
+    shellType params == IrixSh && fromMaybe False (do
+        name <- getLiteralString token
+        guard $ isVariableName name
+        cfga <- cfgAnalysis params
+        state <- CF.getIncomingState cfga (getId token)
+        CF.variableMayBeDeclaredInteger state name)
 
 prop_checkLiteralBreakingTest = verify checkLiteralBreakingTest "[[ a==$foo ]]"
 prop_checkLiteralBreakingTest2 = verify checkLiteralBreakingTest "[ $foo=3 ]"
@@ -1752,11 +1772,13 @@ prop_checkValidCondOps2 = verify checkValidCondOps "[ -M a ]"
 prop_checkValidCondOps2a = verifyNot checkValidCondOps "[ 3 \\> 2 ]"
 prop_checkValidCondOps3 = verifyNot checkValidCondOps "[ 1 = 2 -a 3 -ge 4 ]"
 prop_checkValidCondOps4 = verifyNot checkValidCondOps "[[ ! -v foo ]]"
+prop_checkValidCondOpsIrixLink = verifyNot checkValidCondOps "# shellcheck shell=irix-sh\n[ -l path ]"
 checkValidCondOps _ (TC_Binary id _ s _ _)
     | s `notElem` binaryTestOps =
         warn id 2057 "Unknown binary operator."
-checkValidCondOps _ (TC_Unary id _ s _)
-    | s `notElem`  unaryTestOps =
+checkValidCondOps params (TC_Unary id _ s _)
+    | s `notElem` unaryTestOps
+    , not (shellType params == IrixSh && s == "-l") =
         warn id 2058 "Unknown unary operator."
 checkValidCondOps _ _ = return ()
 
@@ -1769,10 +1791,11 @@ prop_checkUuoeVar6 = verifyNot checkUuoeVar "foo \"$(echo files: *.png)\""
 prop_checkUuoeVar7 = verifyNot checkUuoeVar "foo $(echo $(bar))" -- covered by 2005
 prop_checkUuoeVar8 = verifyNot checkUuoeVar "#!/bin/sh\nz=$(echo)"
 prop_checkUuoeVar9 = verify checkUuoeVar "foo $(echo $(<file))"
-checkUuoeVar _ p =
+checkUuoeVar params p =
     case p of
         T_Backticked id [cmd] -> check id cmd
-        T_DollarExpansion id [cmd] -> check id cmd
+        T_DollarExpansion id [cmd]
+            | shellType params /= IrixSh -> check id cmd
         _ -> return ()
   where
     couldBeOptimized f = case f of
@@ -1790,8 +1813,10 @@ checkUuoeVar _ p =
         case vars of
           (first:rest) ->
             unless (isCovered first rest || "-" `isPrefixOf` onlyLiteralString first) $
-                when (all couldBeOptimized vars) $ style id 2116
-                    "Useless echo? Instead of 'cmd $(echo foo)', just use 'cmd foo'."
+                when (all couldBeOptimized vars) $ style id 2116 $
+                    if shellType params == IrixSh
+                    then "Useless echo in command substitution? Use the command directly."
+                    else "Useless echo? Instead of 'cmd $(echo foo)', just use 'cmd foo'."
           _ -> return ()
 
 
@@ -1842,7 +1867,10 @@ checkPS1Assignments _ _ = return ()
 prop_checkBackticks1 = verify checkBackticks "echo `foo`"
 prop_checkBackticks2 = verifyNot checkBackticks "echo $(foo)"
 prop_checkBackticks3 = verifyNot checkBackticks "echo `#inlined comment` foo"
-checkBackticks params (T_Backticked id list) | not (null list) =
+prop_checkBackticksIrix = verifyNot checkBackticks "# shellcheck shell=irix-sh\necho `foo`"
+checkBackticks params (T_Backticked id list)
+    | shellType params /= IrixSh
+    , not (null list) =
     addComment $
         makeCommentWithFix StyleC id 2006  "Use $(...) notation instead of legacy backticks `...`."
             (fixWith [replaceStart id params 1 "$(", replaceEnd id params 1 ")"])
@@ -2054,10 +2082,10 @@ checkSpuriousExec params t = when (not $ hasExecfail params) $ doLists t
 prop_checkSpuriousExpansion1 = verify checkSpuriousExpansion "if $(true); then true; fi"
 prop_checkSpuriousExpansion3 = verifyNot checkSpuriousExpansion "$(cmd) --flag1 --flag2"
 prop_checkSpuriousExpansion4 = verify checkSpuriousExpansion "$((i++))"
-checkSpuriousExpansion _ (T_SimpleCommand _ _ [T_NormalWord _ [word]]) = check word
+checkSpuriousExpansion params (T_SimpleCommand _ _ [T_NormalWord _ [word]]) = check word
   where
     check word = case word of
-        T_DollarExpansion id _ ->
+        T_DollarExpansion id _ | shellType params /= IrixSh ->
             warn id 2091 "Remove surrounding $() to avoid executing output (or use eval if intentional)."
         T_Backticked id _ ->
             warn id 2092 "Remove backticks to avoid executing output (or use eval if intentional)."
@@ -2713,6 +2741,7 @@ prop_checkUnassignedReferences50 = verifyNotTree checkUnassignedReferences "echo
 prop_checkUnassignedReferences51 = verifyNotTree checkUnassignedReferences "echo ${foo:+$foo}"
 prop_checkUnassignedReferences52 = verifyNotTree checkUnassignedReferences "wait -p pid; echo $pid"
 prop_checkUnassignedReferences53 = verifyTree checkUnassignedReferences "x=($foo)"
+prop_checkUnassignedReferencesIrixSetA = verifyNotTree checkUnassignedReferences "# shellcheck shell=irix-sh\nset -A values zero one two\necho \"${values[1]}\""
 
 checkUnassignedReferences = checkUnassignedReferences' False
 checkUnassignedReferences' includeGlobals params t = warnings
@@ -2754,7 +2783,8 @@ checkUnassignedReferences' includeGlobals params t = warnings
       where
         optionalTip =
             if var `elem` commonCommands
-            then " (for output from commands, use \"$(" ++ var ++ " ..." ++ ")\" )"
+            then " (for output from commands, use \"" ++
+                commandSubstitution params (var ++ " ...") ++ "\" )"
             else fromMaybe "" $ do
                     match <- getBestMatch var
                     return $ " (did you mean '" ++ match ++ "'?)"
@@ -3047,6 +3077,9 @@ checkFunctionDeclarations params
         Ksh ->
             when (hasKeyword && hasParens) $
                 err id 2111 "ksh does not allow 'function' keyword and '()' at the same time."
+        IrixSh ->
+            when (hasKeyword && hasParens) $
+                err id 2111 "IRIX sh does not allow 'function' keyword and '()' at the same time."
         Dash -> forSh
         BusyboxSh -> forSh
         Sh   -> forSh
@@ -3063,14 +3096,19 @@ checkFunctionDeclarations _ _ = return ()
 
 prop_checkStderrPipe1 = verify checkStderrPipe "#!/bin/ksh\nfoo |& bar"
 prop_checkStderrPipe2 = verifyNot checkStderrPipe "#!/bin/bash\nfoo |& bar"
+prop_checkStderrPipeIrix = verify checkStderrPipe "# shellcheck shell=irix-sh\nfoo |& bar"
 checkStderrPipe params =
     case shellType params of
         Ksh -> match
+        IrixSh -> matchIrix
         _ -> const $ return ()
   where
     match (T_Pipe id "|&") =
         err id 2118 "Ksh does not support |&. Use 2>&1 |."
     match _ = return ()
+    matchIrix (T_Pipe id "|&") =
+        err id 2118 "In IRIX sh, |& starts a coprocess and does not take a pipeline command."
+    matchIrix _ = return ()
 
 prop_checkUnpassedInFunctions1 = verifyTree checkUnpassedInFunctions "foo() { echo $1; }; foo"
 prop_checkUnpassedInFunctions2 = verifyNotTree checkUnpassedInFunctions "foo() { echo $1; };"
@@ -3267,7 +3305,9 @@ checkSuspiciousIFS params (T_Assignment _ _ "IFS" [] value) =
   where
     hasDollarSingle = shellType params == Bash || shellType params == Ksh
     n = if hasDollarSingle then  "$'\\n'" else "'<literal linefeed here>'"
-    t = if hasDollarSingle then  "$'\\t'" else "\"$(printf '\\t')\""
+    t = if hasDollarSingle
+        then "$'\\t'"
+        else "\"" ++ commandSubstitution params "printf '\\t'" ++ "\""
     check value =
         case value of
             "\\n" -> suggest n
@@ -3413,7 +3453,7 @@ checkTestArgumentSplitting params t =
 
     checkNumericalGlob SingleBracket token =
         -- var[x] and x*2 look like globs
-        when (shellType params /= Ksh && isGlob token) $
+        when (shellType params `notElem` [Ksh, IrixSh] && isGlob token) $
             err (getId token) 2255 "[ ] does not apply arithmetic evaluation. Evaluate with $((..)) for numbers, or use string comparator for strings."
 
 
@@ -3423,13 +3463,13 @@ prop_checkReadWithoutR3 = verifyNot checkReadWithoutR "read -t 0"
 prop_checkReadWithoutR4 = verifyNot checkReadWithoutR "read -t 0 && read --d '' -r bar"
 prop_checkReadWithoutR5 = verifyNot checkReadWithoutR "read -t 0 foo < file.txt"
 prop_checkReadWithoutR6 = verifyNot checkReadWithoutR "read -u 3 -t 0"
-checkReadWithoutR _ t@T_SimpleCommand {} | t `isUnqualifiedCommand` "read"
+checkReadWithoutR params t@T_SimpleCommand {} | t `isUnqualifiedCommand` "read"
     && "r" `notElem` map snd flags && not has_t0 =
         info (getId $ getCommandTokenOrThis t) 2162 "read without -r will mangle backslashes."
   where
     flags = getAllFlags t
     has_t0 = Just "0" == do
-        parsed <- getGnuOpts flagsForRead $ arguments t
+        parsed <- getGnuOpts (flagsForReadFor $ shellType params) $ arguments t
         (_, t) <- lookup "t" parsed
         getLiteralString t
 
@@ -3834,14 +3874,14 @@ checkSplittingInArrays params t =
             && not (isQuotedAlternativeReference part)
             && getBracedReference (concat $ oversimplify str) `notElem` variablesWithoutSpaces
             -> warn id 2206 $
-                if shellType params == Ksh
+                if shellType params `elem` [Ksh, IrixSh]
                 then "Quote to prevent word splitting/globbing, or split robustly with read -A or while read."
                 else "Quote to prevent word splitting/globbing, or split robustly with mapfile or read -a."
         _ -> return ()
 
     forCommand id =
         warn id 2207 $
-            if shellType params == Ksh
+            if shellType params `elem` [Ksh, IrixSh]
             then "Prefer read -A or while read to split command output (or quote to avoid splitting)."
             else "Prefer mapfile or read -a to split command output (or quote to avoid splitting)."
 
@@ -3905,6 +3945,7 @@ prop_checkPipeToNowhere19 = verifyNot checkPipeToNowhere "find . -print0 | du --
 prop_checkPipeToNowhere20 = verifyNot checkPipeToNowhere "find . | du --exclude-from=/dev/fd/0"
 prop_checkPipeToNowhere21 = verifyNot checkPipeToNowhere "yes | cp -ri foo/* bar"
 prop_checkPipeToNowhere22 = verifyNot checkPipeToNowhere "yes | rm --interactive *"
+prop_checkPipeToNowhereIrixVariableFds = verifyNot checkPipeToNowhere "# shellcheck shell=irix-sh\nOUTPUTFD=1\ncommand >&$OUTPUTFD 2>&$OUTPUTFD"
 
 data PipeType = StdoutPipe | StdoutStderrPipe | NoPipe deriving (Eq)
 checkPipeToNowhere :: Parameters -> Token -> WriterT [TokenComment] Identity ()
@@ -4050,7 +4091,9 @@ checkPipeToNowhere params t =
                     T_Less {} -> return [0]
                     T_Greater {} -> return [1]
                     T_DGREAT {} -> return [1]
-                    T_GREATAND {} -> return [1, 2]
+                    T_GREATAND {}
+                        | shellType params == IrixSh -> return [1]
+                        | otherwise -> return [1, 2]
                     T_CLOBBER {} -> return [1]
                     T_IoDuplicate _ op "-" -> getDefaultFds op
                     _ -> Nothing
@@ -4697,6 +4740,7 @@ checkEqualsInCommand params originalToken =
         case shellType params of
             Bash -> errWithFix id 2277 "Use BASH_ARGV0 to assign to $0 in bash (or use [ ] to compare)." bashfix
             Ksh -> err id 2278 "$0 can't be assigned in Ksh (but it does reflect the current function)."
+            IrixSh -> err id 2278 "$0 can't be assigned in IRIX sh (but it does reflect the current function)."
             Dash -> err id 2279 "$0 can't be assigned in Dash. This becomes a command name."
             BusyboxSh -> err id 2279 "$0 can't be assigned in Busybox Ash. This becomes a command name."
             _ -> err id 2280 "$0 can't be assigned this way, and there is no portable alternative."
