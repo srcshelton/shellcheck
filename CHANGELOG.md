@@ -35,8 +35,9 @@
   extglobs, and rejected invalid-character validators in `case` arms.
 
 ### Fixed
-- Variables read from literal trap actions are now recognized in arithmetic
-  and other shell syntax, rather than only in `$name` expansions.
+- Variables read from trap actions are now recognized in arithmetic and other
+  shell syntax, rather than only in `$name` expansions. Assignments made before
+  a read within the action are kept local to that delayed execution context.
 - SC2086 now uses exact `case` patterns to constrain the selector within the
   matching arm, while respecting assignments, positional-parameter changes,
   fallthrough, and custom `IFS` values.

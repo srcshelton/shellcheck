@@ -626,10 +626,6 @@ getReferencedVariableCommand base@(T_SimpleCommand _ _ (T_NormalWord _ (T_Litera
         "local" -> if "x" `elem` flags
             then concatMap getReference rest
             else []
-        "trap" ->
-            case rest of
-                head:_ -> map (\x -> (base, head, x)) $ getVariablesFromLiteralToken head
-                _ -> []
         "alias" -> [(base, token, name) | token <- rest, name <- getVariablesFromLiteralToken token]
         _ -> []
   where
@@ -647,37 +643,50 @@ getReferencedVariableCommand base@(T_SimpleCommand _ _ (T_NormalWord _ (T_Litera
 
 getReferencedVariableCommand _ = []
 
--- A literal trap action is shell code which runs later. Parsing it lets us
--- recognize reads in arithmetic and other contexts which the deliberately
--- simple literal-variable scan above cannot see. Keep the outer trap tokens in
--- the result so any diagnostics still point at the user's script rather than
--- at the separately parsed snippet.
+-- A trap action is shell code which runs later. Parse its static structure,
+-- substituting ':' for expansions which happen while installing the trap. This
+-- recognizes both richer syntax and trap-local assignments without mistaking
+-- those assignments for changes to the surrounding script. Keep the outer trap
+-- tokens in the result so diagnostics point at the user's script rather than at
+-- the separately parsed snippet.
 getTrapBodyReferences shell base@(T_SimpleCommand _ _ (T_NormalWord _ (T_Literal _ "trap":_):action:_)) =
-    case getLiteralString action of
-        Just script
-            | script /= "-"
-            , null (prComments parsed)
-            , Just root <- prRoot parsed ->
-                [ (base, action, name)
-                | name <- nub $ collectReferences root
-                , name `notElem` literalReferences
-                ]
-          where
-            parsed = runIdentity $ parseScript (mockedSystemInterface []) newParseSpec {
-                psFilename = "trap action",
-                psScript = script,
-                psIgnoreRC = True,
-                psShellTypeOverride = Just shell
-            }
-            literalReferences = getVariablesFromLiteralToken action
-        _ -> []
+    if script == "-"
+    then []
+    else case prRoot parsed of
+        Just root | null (prComments parsed) ->
+            [ (base, action, name)
+            | name <- nub $ collectExternalReferences parsed root
+            ]
+        _ ->
+            [ (base, action, name)
+            | name <- nub $ getVariablesFromLiteralToken action
+            ]
   where
-    collectReferences root =
-        map (\(_, _, name) -> name) $
-            execState (void $ doAnalysis collect root) []
+    script = getLiteralStringDef ":" action
+    parsed = runIdentity $ parseScript (mockedSystemInterface []) newParseSpec {
+        psFilename = "trap action",
+        psScript = script,
+        psIgnoreRC = True,
+        psShellTypeOverride = Just shell
+    }
+
+    collectExternalReferences parseResult root =
+        [ name
+        | Reference (_, token, name) <- getVariableFlow params root
+        , mayNeedOuterValue params token name
+        ]
       where
-        parents = getParentTree root
-        collect token = modify (getReferencedVariables parents token ++)
+        params = makeParameters $ (newAnalysisSpec root) {
+            asShellType = Just shell,
+            asCheckSourced = False,
+            asExecutionMode = Executed,
+            asTokenPositions = prTokenPositions parseResult
+        }
+
+    mayNeedOuterValue params token name =
+        case cfgAnalysis params >>= (\analysis -> CF.getIncomingState analysis (getId token)) of
+            Just state -> CF.variableMayBeUnset state name
+            Nothing -> True
 getTrapBodyReferences _ _ = []
 
 -- The function returns a tuple consisting of four items describing an assignment.
