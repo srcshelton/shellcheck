@@ -3285,6 +3285,12 @@ prop_checkLoopKeywordScope7 = verifyNot checkLoopKeywordScope "#!/bin/ksh\nwhile
 prop_checkLoopKeywordScope8 = verify checkLoopKeywordScope "while true; do { foo || break; } | bar; done"
 prop_checkLoopKeywordScope9 = verify checkLoopKeywordScope "while true; do { foo || continue; } | bar; done"
 prop_checkLoopKeywordScope10 = verifyNot checkLoopKeywordScope "input | while read -r line; do break; done"
+prop_checkLoopKeywordScope11 = verifyMessage checkLoopKeywordScope 2106
+    "This break only affects the loop copy in the subshell caused by the pipeline; the parent loop continues."
+    "while true; do { foo || break; } | bar; done"
+prop_checkLoopKeywordScope12 = verifyMessage checkLoopKeywordScope 2106
+    "This continue only affects the loop copy in the subshell caused by the pipeline; the parent loop continues."
+    "while true; do { foo || continue; } | bar; done"
 checkLoopKeywordScope params t |
         Just name <- getCommandName t, name `elem` ["continue", "break"] =
     if any isLoop path
