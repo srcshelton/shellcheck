@@ -3202,12 +3202,16 @@ prop_checkLoopKeywordScope4 = verifyNot checkLoopKeywordScope "while true; do br
 prop_checkLoopKeywordScope5 = verify checkLoopKeywordScope "if true; then break; fi"
 prop_checkLoopKeywordScope6 = verify checkLoopKeywordScope "while true; do true | { break; }; done"
 prop_checkLoopKeywordScope7 = verifyNot checkLoopKeywordScope "#!/bin/ksh\nwhile true; do true | { break; }; done"
+prop_checkLoopKeywordScope8 = verify checkLoopKeywordScope "while true; do { foo || break; } | bar; done"
+prop_checkLoopKeywordScope9 = verify checkLoopKeywordScope "while true; do { foo || continue; } | bar; done"
+prop_checkLoopKeywordScope10 = verifyNot checkLoopKeywordScope "input | while read -r line; do break; done"
 checkLoopKeywordScope params t |
         Just name <- getCommandName t, name `elem` ["continue", "break"] =
     if any isLoop path
     then case map subshellType $ filter (not . isFunction) path of
         Just str:_ -> warn (getId t) 2106 $
-            "This only exits the subshell caused by the " ++ str ++ "."
+            "This " ++ name ++ " only affects the loop copy in the subshell caused by the " ++
+                str ++ "; the parent loop continues."
         _ -> return ()
     else case path of
         -- breaking at a source/function invocation is an abomination. Let's ignore it.

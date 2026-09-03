@@ -22,6 +22,8 @@
   though it accepts the text syntactically; use legacy backticks.
 
 ### Changed
+- SC2106 now identifies the ineffective loop-control keyword and explains that
+  the parent loop continues.
 
 ### Fixed
 - SC2038 now recommends NUL delimiters end-to-end instead of suggesting
