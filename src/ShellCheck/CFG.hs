@@ -120,6 +120,7 @@ data CFEffect =
     | CFWriteLocal String CFValue
     | CFWritePrefix String CFValue
     | CFReadNounset
+    | CFReadIFS
     | CFSetNounset Bool
     | CFDefineFunction String Id Node Node
     | CFUndefine String
@@ -519,12 +520,13 @@ build t = do
         TA_Variable id name indices -> do
             subscript <- sequentially indices
             nounset <- newNodeRange $ applySingle $ IdTagged id CFReadNounset
+            ifs <- newNodeRange $ applySingle $ IdTagged id CFReadIFS
             hint <-
                 if null indices
                 then none
                 else nodeToRange <$> newNode (applySingle $ IdTagged id $ CFHintArray name)
             read <- nodeToRange <$> newNode (applySingle $ IdTagged id $ CFReadVariable name)
-            linkRanges [subscript, nounset, hint, read]
+            linkRanges [subscript, nounset, ifs, hint, read]
 
         TA_Unary id op (TA_Variable _ name indices) | "--" `isInfixOf` op || "++" `isInfixOf` op -> do
             subscript <- sequentially indices
@@ -729,8 +731,9 @@ build t = do
             let offsets = getOffsetReferences str
             vals <- build t
             nounset <- newNodeRange $ applySingle $ IdTagged id CFReadNounset
+            ifs <- newNodeRange $ applySingle $ IdTagged id CFReadIFS
             others <- mapM (\x -> nodeToRange <$> newNode (applySingle $ IdTagged id $ CFReadVariable x)) (indices ++ offsets)
-            deps <- linkRanges (vals:nounset:others)
+            deps <- linkRanges (vals:nounset:ifs:others)
             read <- nodeToRange <$> newNode (applySingle $ IdTagged id $ CFReadVariable reference)
             totalRead <- linkRange deps read
 

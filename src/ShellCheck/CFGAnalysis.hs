@@ -116,6 +116,7 @@ data ProgramState = ProgramState {
     variablesInScope :: M.Map String VariableState,
     -- Nothing means that nounset may be either enabled or disabled.
     nounsetState :: Maybe Bool,
+    variablesMaySplitOnIFS :: S.Set String,
     exitCodes :: S.Set Id,
     stateIsReachable :: Bool
 } deriving (Show, Eq, Generic, NFData)
@@ -129,6 +130,7 @@ internalToExternal s =
             Just NounsetDisabled -> Just False
             Just NounsetEnabled -> Just True
             _ -> Nothing,
+        variablesMaySplitOnIFS = M.keysSet $ M.filter maySplitOnIFS flatVars,
         -- internalState = s, -- For debugging
         exitCodes = fromMaybe S.empty $ sExitCodes s,
         stateIsReachable = fromMaybe True $ sIsReachable s
@@ -140,6 +142,28 @@ internalToExternal s =
         }
     }
     flatVars = M.unions $ map mapStorage [sPrefixValues s, sLocalValues s, sGlobalValues s]
+    ifsState = M.lookup "IFS" flatVars
+    ifsLiteral = ifsState >>= literalValue . variableValue
+    ifsMayBeUnset = maybe True variableMayBeUnsetState ifsState
+
+    maySplitOnIFS state =
+        maySplitWith ifsLiteral state
+            || (ifsMayBeUnset && maySplitWith (Just " \t\n") state)
+
+    maySplitWith possibleIFS state =
+        case literalValue $ variableValue state of
+            Just value -> maybe (not $ null value) (any (`elem` value)) possibleIFS
+            Nothing ->
+                case possibleIFS of
+                    Nothing -> spaceStatus (variableValue state) /= SpaceStatusEmpty
+                    Just chars
+                        | isInteger state -> any (`elem` "-+0123456789") chars
+                        | spaceStatus (variableValue state) == SpaceStatusClean ->
+                            any (`notElem` " \t\n*?[") chars
+                        | otherwise -> not $ null chars
+
+    isInteger state =
+        all (S.member CFVPInteger) $ variableProperties state
 
 -- Conveniently get the state before a token id
 getIncomingState :: CFGAnalysis -> Id -> Maybe ProgramState
@@ -214,7 +238,7 @@ unreachableState = modified newInternalState {
 -- The default state we assume we get from the environment
 createEnvironmentState :: InternalState
 createEnvironmentState = do
-    (foldl' (flip ($)) newInternalState $ concat [
+    (insertGlobal "IFS" defaultIfsState $ foldl' (flip ($)) newInternalState $ concat [
         addVars Data.internalVariables unknownVariableState,
         addVars Data.variablesWithoutSpaces spacelessVariableState,
         addVars Data.specialIntegerVariables integerVariableState
@@ -230,6 +254,10 @@ createEnvironmentState = do
     }
     integerVariableState = unknownVariableState {
         variableValue = unknownIntegerValue
+    }
+    defaultIfsState = unknownVariableState {
+        variableValue = literalToVariableValue " \t\n",
+        variableMayBeUnsetState = False
     }
 
 
@@ -1155,6 +1183,7 @@ transferEffect ctx effect =
                 "?" -> void $ readExitCodes ctx
                 _ -> void $ readVariable ctx name
         CFReadNounset -> void $ readNounset ctx
+        CFReadIFS -> void $ readVariable ctx "IFS"
         CFWriteVariable name value -> do
             val <- cfValueToVariableValue ctx value
             updateVariableValue ctx name val

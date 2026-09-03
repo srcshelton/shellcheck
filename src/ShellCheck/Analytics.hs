@@ -2285,6 +2285,15 @@ prop_checkSpacefulnessCfg63 = verify checkSpacefulnessCfg "f && declare -i s; s=
 prop_checkSpacefulnessCfg64 = verifyNot checkSpacefulnessCfg "declare -i s; s='x + y'; x=$s; echo $x"
 prop_checkSpacefulnessCfg65 = verifyNot checkSpacefulnessCfg "f() { s=$?; echo $s; }; f"
 prop_checkSpacefulnessCfg66 = verifyNot checkSpacefulnessCfg "f() { s=$?; echo $s; }"
+prop_checkSpacefulnessCfg67 = verify checkSpacefulnessCfg "IFS=2; declare -i s=12; echo $s"
+prop_checkSpacefulnessCfg68 = verifyNot checkSpacefulnessCfg "IFS=:; declare -i s=12; echo $s"
+prop_checkSpacefulnessCfg69 = verify checkSpacefulnessCfg "IFS=$separator; declare -i s=12; echo $s"
+prop_checkSpacefulnessCfg70 = verifyNot checkSpacefulnessCfg "declare -i s=12; echo $s; IFS=2"
+prop_checkSpacefulnessCfg71 = verifyNot checkSpacefulnessCfg "IFS=2; unset IFS; declare -i s=12; echo $s"
+prop_checkSpacefulnessCfg72 = verify checkSpacefulnessCfg "if condition; then IFS=2; fi; declare -i s=12; echo $s"
+prop_checkSpacefulnessCfg73 = verify checkSpacefulnessCfg "IFS=:; value=a:b; echo $value"
+prop_checkSpacefulnessCfg74 = verifyNot checkSpacefulnessCfg "IFS=:; value=ab; echo $value"
+prop_checkSpacefulnessCfg75 = verify checkSpacefulnessCfg "IFS=:; unset IFS; value='a b'; echo $value"
 
 checkSpacefulnessCfg = checkSpacefulnessCfg' True
 checkVerboseSpacefulnessCfg = checkSpacefulnessCfg' False
@@ -2321,7 +2330,9 @@ checkSpacefulnessCfg' dirtyPass params token@(T_DollarBraced id _ list) =
         cfga <- cfgAnalysis params
         state <- CF.getIncomingState cfga id
         value <- Map.lookup name $ CF.variablesInScope state
-        return $ isCleanState value
+        return $
+            name `S.notMember` CF.variablesMaySplitOnIFS state
+                && isCleanState value
 
     isCleanState state =
         (all (S.member CFVPInteger) $ CF.variableProperties state)
