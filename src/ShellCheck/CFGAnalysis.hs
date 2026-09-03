@@ -117,6 +117,7 @@ data ProgramState = ProgramState {
     -- Nothing means that nounset may be either enabled or disabled.
     nounsetState :: Maybe Bool,
     variablesMaySplitOnIFS :: S.Set String,
+    integerValuesMaySplitOnIFS :: Bool,
     exitCodes :: S.Set Id,
     stateIsReachable :: Bool
 } deriving (Show, Eq, Generic, NFData)
@@ -131,6 +132,8 @@ internalToExternal s =
             Just NounsetEnabled -> Just True
             _ -> Nothing,
         variablesMaySplitOnIFS = M.keysSet $ M.filter maySplitOnIFS flatVars,
+        integerValuesMaySplitOnIFS =
+            maybe True (any (`elem` "-0123456789")) ifsLiteral,
         -- internalState = s, -- For debugging
         exitCodes = fromMaybe S.empty $ sExitCodes s,
         stateIsReachable = fromMaybe True $ sIsReachable s
@@ -157,7 +160,7 @@ internalToExternal s =
                 case possibleIFS of
                     Nothing -> spaceStatus (variableValue state) /= SpaceStatusEmpty
                     Just chars
-                        | isInteger state -> any (`elem` "-+0123456789") chars
+                        | isInteger state -> any (`elem` "-0123456789") chars
                         | spaceStatus (variableValue state) == SpaceStatusClean ->
                             any (`notElem` " \t\n*?[") chars
                         | otherwise -> not $ null chars

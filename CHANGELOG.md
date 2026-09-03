@@ -28,7 +28,7 @@
   `find -exec`, whose invoked command may still emit newline-delimited names.
 - SC2227 is now limited to redirections lexically inside `find` command actions.
 - SC2086 now accounts for nonstandard `IFS` characters when deciding that a
-  known or integer-typed variable cannot undergo word splitting.
+  known or integer-valued expansion cannot undergo word splitting.
 
 ### Removed
 - SC3003: removed since ANSI C string is specified in POSIX.1-2024

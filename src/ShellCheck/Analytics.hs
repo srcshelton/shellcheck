@@ -2301,6 +2301,13 @@ prop_checkSpacefulnessCfg72 = verify checkSpacefulnessCfg "if condition; then IF
 prop_checkSpacefulnessCfg73 = verify checkSpacefulnessCfg "IFS=:; value=a:b; echo $value"
 prop_checkSpacefulnessCfg74 = verifyNot checkSpacefulnessCfg "IFS=:; value=ab; echo $value"
 prop_checkSpacefulnessCfg75 = verify checkSpacefulnessCfg "IFS=:; unset IFS; value='a b'; echo $value"
+prop_checkSpacefulnessCfg76 = verify checkSpacefulnessCfg "IFS=0; while test $# -gt 0; do shift; done"
+prop_checkSpacefulnessCfg77 = verifyNot checkSpacefulnessCfg "while test $# -gt 0; do shift; done"
+prop_checkSpacefulnessCfg78 = verify checkSpacefulnessCfg "IFS=0; value=abc; echo ${#value}"
+prop_checkSpacefulnessCfg79 = verifyNot checkSpacefulnessCfg "IFS=:; value=abc; echo ${#value}"
+prop_checkSpacefulnessCfg80 = verify checkSpacefulnessCfg "IFS=0; echo $((value + 1))"
+prop_checkSpacefulnessCfg81 = verifyNot checkSpacefulnessCfg "IFS=:; echo $((value + 1))"
+prop_checkSpacefulnessCfg82 = verifyNot checkSpacefulnessCfg "IFS=0; value=$((other + 1))"
 
 checkSpacefulnessCfg = checkSpacefulnessCfg' True
 checkVerboseSpacefulnessCfg = checkSpacefulnessCfg' False
@@ -2308,7 +2315,7 @@ checkVerboseSpacefulnessCfg = checkSpacefulnessCfg' False
 checkSpacefulnessCfg' :: Bool -> (Parameters -> Token -> Writer [TokenComment] ())
 checkSpacefulnessCfg' dirtyPass params token@(T_DollarBraced id _ list) =
     when (needsQuoting && (dirtyPass == not isClean)) $
-        unless (name `elem` specialVariablesWithoutSpaces || quotesMayConflictWithSC2281 params token) $
+        unless (isSafeSpecial || quotesMayConflictWithSC2281 params token) $
             if dirtyPass
             then
                 if isDefaultAssignment (parentMap params) token
@@ -2328,18 +2335,36 @@ checkSpacefulnessCfg' dirtyPass params token@(T_DollarBraced id _ list) =
     parents = parentMap params
     needsQuoting =
               not (isArrayExpansion token) -- There's another warning for this
-              && not (isCountingReference token)
+              && (not countingReference || expansionMaySplit)
               && not (isQuoteFree (shellType params) parents token)
               && not (isQuotedAlternativeReference token)
               && not (usedAsCommandName parents token)
 
-    isClean = fromMaybe False $ do
+    countingReference = isCountingReference token
+
+    incomingState = do
         cfga <- cfgAnalysis params
-        state <- CF.getIncomingState cfga id
-        value <- Map.lookup name $ CF.variablesInScope state
+        CF.getIncomingState cfga id
+
+    expansionMaySplit = fromMaybe False $ do
+        state <- incomingState
         return $
-            name `S.notMember` CF.variablesMaySplitOnIFS state
-                && isCleanState value
+            if countingReference
+            then CF.integerValuesMaySplitOnIFS state
+            else name `S.member` CF.variablesMaySplitOnIFS state
+
+    isSafeSpecial =
+        name `elem` specialVariablesWithoutSpaces && not expansionMaySplit
+
+    isClean = fromMaybe False $ do
+        state <- incomingState
+        if countingReference
+        then return $ not $ CF.integerValuesMaySplitOnIFS state
+        else do
+            value <- Map.lookup name $ CF.variablesInScope state
+            return $
+                name `S.notMember` CF.variablesMaySplitOnIFS state
+                    && isCleanState value
 
     isCleanState state =
         (all (S.member CFVPInteger) $ CF.variableProperties state)
@@ -2349,6 +2374,20 @@ checkSpacefulnessCfg' dirtyPass params token@(T_DollarBraced id _ list) =
         let modifier = getBracedModifier bracedString in
             any (`isPrefixOf` modifier) ["=", ":="]
             && isParamTo parents ":" token
+
+checkSpacefulnessCfg' True params token@(T_DollarArithmetic id _) =
+    when (needsQuoting && maySplit) $
+        infoWithFix id 2086 "Double quote to prevent globbing and word splitting." $
+            addDoubleQuotesAround params token
+  where
+    parents = parentMap params
+    needsQuoting =
+        not (isQuoteFree (shellType params) parents token)
+            && not (usedAsCommandName parents token)
+    maySplit = fromMaybe False $ do
+        cfga <- cfgAnalysis params
+        state <- CF.getIncomingState cfga id
+        return $ CF.integerValuesMaySplitOnIFS state
 
 checkSpacefulnessCfg' _ _ _ = return ()
 

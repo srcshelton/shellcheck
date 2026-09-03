@@ -719,7 +719,10 @@ build t = do
             status <- newNodeRange $ CFSetExitCode id
             linkRanges [start, child, status]
 
-        T_DollarArithmetic _ arith -> build arith
+        T_DollarArithmetic id arith -> do
+            value <- build arith
+            ifs <- newNodeRange $ applySingle $ IdTagged id CFReadIFS
+            linkRanges [value, ifs]
         T_DollarDoubleQuoted _ list -> sequentially list
         T_DollarSingleQuoted _ _ -> none
         T_DollarBracket _ t -> build t
