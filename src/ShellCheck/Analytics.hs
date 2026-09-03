@@ -277,6 +277,13 @@ optionalTreeChecks = [
     }, nodeChecksToTreeCheck [checkUnboundVariables])
 
     ,(newCheckDescription {
+        cdName = "check-exit-in-subshell",
+        cdDescription = "Warn about exit or return in implicit pipeline subshells",
+        cdPositive = "input | while read -r line; do exit 1; done",
+        cdNegative = "while read -r line; do exit 1; done < input"
+    }, nodeChecksToTreeCheck [checkExitInSubshell])
+
+    ,(newCheckDescription {
         cdName = "avoid-nullary-conditions",
         cdDescription = "Suggest explicitly using -n in `[ $var ]`",
         cdPositive = "[ \"$var\" ]",
@@ -2528,6 +2535,28 @@ checkUnboundVariables params token =
                 getBracedModifier (concat $ oversimplify contents)
                     `matches` mkRegex "^(\\[.*\\])?:?[-+=?]"
             _ -> False
+
+
+prop_checkExitInSubshell1 = verify checkExitInSubshell "input | while read -r line; do exit 1; done"
+prop_checkExitInSubshell2 = verify checkExitInSubshell "f() { input | while read -r line; do return 1; done; }; f"
+prop_checkExitInSubshell3 = verify checkExitInSubshell "{ exit 1; } | cat"
+prop_checkExitInSubshell4 = verifyNot checkExitInSubshell "while read -r line; do exit 1; done < input"
+prop_checkExitInSubshell5 = verifyNot checkExitInSubshell "value=$(exit 1)"
+prop_checkExitInSubshell6 = verifyNot checkExitInSubshell "#!/bin/ksh\ninput | while read -r line; do exit 1; done"
+prop_checkExitInSubshell7 = verifyNot checkExitInSubshell "#!/bin/bash\nshopt -s lastpipe\ninput | while read -r line; do exit 1; done"
+prop_checkExitInSubshell8 = verify checkExitInSubshell "#!/bin/dash\ninput | while read line; do exit 1; done"
+checkExitInSubshell params command@T_SimpleCommand {}
+    | Just keyword <- getCommandName command
+    , keyword `elem` ["exit", "return"]
+    , any isImplicitPipeline $ NE.toList $ getPath (parentMap params) command =
+        warn (getId $ getCommandTokenOrThis command) 2345 $ message keyword
+  where
+    isImplicitPipeline token = leadType params token == SubshellScope "pipeline"
+    message "return" =
+        "This return only leaves the function copy in an implicit pipeline subshell; the parent function continues."
+    message _ =
+        "This exit only terminates an implicit pipeline subshell; the parent shell continues."
+checkExitInSubshell _ _ = return ()
 
 prop_checkQuotesInLiterals1 = verifyTree checkQuotesInLiterals "param='--foo=\"bar\"'; app $param"
 prop_checkQuotesInLiterals1a = verifyTree checkQuotesInLiterals "param=\"--foo='lolbar'\"; app $param"

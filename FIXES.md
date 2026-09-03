@@ -6,3 +6,4 @@
 | [#3149](https://github.com/koalaman/shellcheck/issues/3149) | `Clarify end-to-end filename safety in SC2038 (#3149)` |
 | [#3148](https://github.com/koalaman/shellcheck/issues/3148) | `Restrict SC2227 to find actions (#3148)` |
 | [#757](https://github.com/koalaman/shellcheck/issues/757) | `Add flow-sensitive nounset diagnostics (#757)` |
+| [#751](https://github.com/koalaman/shellcheck/issues/751) | `Warn about control flow in pipeline subshells (#751)` |

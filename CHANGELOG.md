@@ -14,6 +14,8 @@
   double quoting variable expansions where quoting preserves their role.
 - SC2344: Optional `check-unbound-variables` warning for expansions which may
   fail when `set -u` is active.
+- SC2345: Optional `check-exit-in-subshell` warning for `exit` and `return`
+  inside implicit pipeline subshells.
 - SC3068: IRIX sh does not perform command substitution for `$(..)`, even
   though it accepts the text syntactically; use legacy backticks.
 
