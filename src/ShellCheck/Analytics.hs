@@ -270,6 +270,13 @@ optionalTreeChecks = [
     }, nodeChecksToTreeCheck [checkVariableQuotes])
 
     ,(newCheckDescription {
+        cdName = "check-unbound-variables",
+        cdDescription = "Warn about expansions that may fail under set -u",
+        cdPositive = "set -u; [ -n \"$var\" ]",
+        cdNegative = "set -u; [ -n \"${var:-}\" ]"
+    }, nodeChecksToTreeCheck [checkUnboundVariables])
+
+    ,(newCheckDescription {
         cdName = "avoid-nullary-conditions",
         cdDescription = "Suggest explicitly using -n in `[ $var ]`",
         cdPositive = "[ \"$var\" ]",
@@ -2473,6 +2480,54 @@ checkVariableQuotes params token@(T_DollarBraced id _ contents)
             [":-", ":=", ":+", ":?", "-", "=", "+", "?"]
     isWordModifier _ = False
 checkVariableQuotes _ _ = return ()
+
+
+prop_checkUnboundVariables1 = verify checkUnboundVariables "set -u; [ -n \"$var\" ]"
+prop_checkUnboundVariables2 = verifyNot checkUnboundVariables "[ -n \"$var\" ]"
+prop_checkUnboundVariables3 = verifyNot checkUnboundVariables "set -u; var=; echo \"$var\""
+prop_checkUnboundVariables4 = verifyNot checkUnboundVariables "set -u; echo \"${var:-}\""
+prop_checkUnboundVariables5 = verifyNot checkUnboundVariables "set -u; echo \"${var?missing}\""
+prop_checkUnboundVariables6 = verify checkUnboundVariables "set -u; if condition; then var=value; fi; echo \"$var\""
+prop_checkUnboundVariables7 = verify checkUnboundVariables "set -u; var=value; unset var; echo \"$var\""
+prop_checkUnboundVariables8 = verifyNot checkUnboundVariables "set -u; set +u; echo \"$var\""
+prop_checkUnboundVariables9 = verify checkUnboundVariables "#!/bin/bash -u\n[ -z \"$var\" ]"
+prop_checkUnboundVariables10 = verify checkUnboundVariables "f() { echo \"$var\"; }; set -u; f"
+prop_checkUnboundVariables11 = verify checkUnboundVariables "set -u; echo $((var + 1))"
+prop_checkUnboundVariables12 = verifyNot checkUnboundVariables "set -u; echo $((var = 1))"
+prop_checkUnboundVariables13 = verify checkUnboundVariables "set -o nounset; test -n \"$var\""
+prop_checkUnboundVariables14 = verifyNot checkUnboundVariables "set -o errexit; test -n \"$var\""
+prop_checkUnboundVariables15 = verify checkUnboundVariables "set -u; if condition; then set +u; fi; echo \"$var\""
+prop_checkUnboundVariables16 = verifyNot checkUnboundVariables "(set -u); echo \"$var\""
+prop_checkUnboundVariables17 = verify checkUnboundVariables "set -u; declare var; echo \"$var\""
+checkUnboundVariables params token =
+    case reference of
+        Just name
+            | isVariableName name
+            , name `notElem` internalVariables
+            , not nounsetSafe ->
+                case cfgAnalysis params >>= (\analysis -> CF.getIncomingState analysis (getId token)) of
+                    Just state
+                        | CF.nounsetState state /= Just False
+                        , CF.variableMayBeUnset state name ->
+                            info (getId token) 2344 $
+                                name ++ " may be unset here, causing this expansion to fail under set -u."
+                    _ -> return ()
+        _ -> return ()
+  where
+    reference =
+        case token of
+            T_DollarBraced _ _ contents ->
+                Just $ getBracedReference $ concat $ oversimplify contents
+            TA_Variable _ name _
+                | not $ null $ getReferencedVariables (parentMap params) token -> Just name
+            _ -> Nothing
+
+    nounsetSafe =
+        case token of
+            T_DollarBraced _ _ contents ->
+                getBracedModifier (concat $ oversimplify contents)
+                    `matches` mkRegex "^(\\[.*\\])?:?[-+=?]"
+            _ -> False
 
 prop_checkQuotesInLiterals1 = verifyTree checkQuotesInLiterals "param='--foo=\"bar\"'; app $param"
 prop_checkQuotesInLiterals1a = verifyTree checkQuotesInLiterals "param=\"--foo='lolbar'\"; app $param"

@@ -58,6 +58,7 @@ module ShellCheck.CFGAnalysis (
     ,getIncomingState
     ,getOutgoingState
     ,doesPostDominate
+    ,variableMayBeUnset
     ,variableMayBeDeclaredInteger
     ,variableMayBeAssignedInteger
     ,ShellCheck.CFGAnalysis.runTests -- STRIP
@@ -113,6 +114,8 @@ data CFGAnalysis = CFGAnalysis {
 data ProgramState = ProgramState {
     -- internalState :: InternalState, -- For debugging
     variablesInScope :: M.Map String VariableState,
+    -- Nothing means that nounset may be either enabled or disabled.
+    nounsetState :: Maybe Bool,
     exitCodes :: S.Set Id,
     stateIsReachable :: Bool
 } deriving (Show, Eq, Generic, NFData)
@@ -122,6 +125,10 @@ internalToExternal s =
     ProgramState {
         -- Censor the literal value to avoid introducing dependencies on it. It's just for debugging.
         variablesInScope = M.map censor flatVars,
+        nounsetState = case sNounset s of
+            Just NounsetDisabled -> Just False
+            Just NounsetEnabled -> Just True
+            _ -> Nothing,
         -- internalState = s, -- For debugging
         exitCodes = fromMaybe S.empty $ sExitCodes s,
         stateIsReachable = fromMaybe True $ sIsReachable s
@@ -160,6 +167,10 @@ variableMayHaveState state var property = do
     value <- M.lookup var $ variablesInScope state
     return $ any (S.member property) $ variableProperties value
 
+-- Determine whether a variable can be unset on any path reaching this point.
+variableMayBeUnset state var =
+    maybe True variableMayBeUnsetState $ M.lookup var $ variablesInScope state
+
 -- See if any execution path declares the variable an integer (declare -i).
 variableMayBeDeclaredInteger state var = variableMayHaveState state var CFVPInteger
 
@@ -171,12 +182,16 @@ variableMayBeAssignedInteger state var = do
 getDataForNode analysis node = M.lookup node $ nodeToData analysis
 
 -- The current state of data flow at a point in the program, potentially as a diff
+data NounsetStatus = NounsetDisabled | NounsetEnabled | NounsetUnknown
+  deriving (Show, Eq, Ord, Generic, NFData)
+
 data InternalState = InternalState {
     sVersion :: Integer,
     sGlobalValues :: VersionedMap String VariableState,
     sLocalValues :: VersionedMap String VariableState,
     sPrefixValues :: VersionedMap String VariableState,
     sFunctionTargets :: VersionedMap String FunctionValue,
+    sNounset :: Maybe NounsetStatus,
     sExitCodes :: Maybe (S.Set Id),
     sIsReachable :: Maybe Bool
 } deriving (Show, Generic, NFData)
@@ -187,6 +202,7 @@ newInternalState = InternalState {
     sLocalValues = vmEmpty,
     sPrefixValues = vmEmpty,
     sFunctionTargets = vmEmpty,
+    sNounset = Nothing,
     sExitCodes = Nothing,
     sIsReachable = Nothing
 }
@@ -198,11 +214,11 @@ unreachableState = modified newInternalState {
 -- The default state we assume we get from the environment
 createEnvironmentState :: InternalState
 createEnvironmentState = do
-    foldl' (flip ($)) newInternalState $ concat [
+    (foldl' (flip ($)) newInternalState $ concat [
         addVars Data.internalVariables unknownVariableState,
         addVars Data.variablesWithoutSpaces spacelessVariableState,
         addVars Data.specialIntegerVariables integerVariableState
-        ]
+        ]) { sNounset = Just NounsetDisabled }
   where
     addVars names val = map (\name -> insertGlobal name val) names
     spacelessVariableState = unknownVariableState {
@@ -268,6 +284,7 @@ data StateDependency =
     | DepIsRecursive Node Bool
     -- The set of commands that could have provided the exit code $?
     | DepExitCodes (S.Set Id)
+    | DepNounset NounsetStatus
     deriving (Show, Eq, Ord, Generic, NFData)
 
 -- A function definition, or lack thereof
@@ -290,6 +307,7 @@ depsToState set = foldl insert newInternalState $ S.toList set
             DepProperties scope name props -> insertIn False scope name unknownVariableState { variableProperties = props } state
             DepIsRecursive _ _ -> state
             DepExitCodes s -> setExitCodes s state
+            DepNounset status -> modified state { sNounset = Just status }
 
     insertIn overwrite scope name val state =
         let
@@ -317,7 +335,8 @@ data VariableValue = VariableValue {
 
 data VariableState = VariableState {
     variableValue :: VariableValue,
-    variableProperties :: VariableProperties
+    variableProperties :: VariableProperties,
+    variableMayBeUnsetState :: Bool
 }
     deriving (Show, Eq, Ord, Generic, NFData)
 
@@ -334,7 +353,8 @@ defaultProperties = S.singleton S.empty
 
 unknownVariableState = VariableState {
     variableValue = unknownVariableValue,
-    variableProperties = defaultProperties
+    variableProperties = defaultProperties,
+    variableMayBeUnsetState = True
 }
 
 unknownVariableValue = VariableValue {
@@ -351,12 +371,15 @@ emptyVariableValue = unknownVariableValue {
 
 unsetVariableState = VariableState {
     variableValue = emptyVariableValue,
-    variableProperties = defaultProperties
+    variableProperties = defaultProperties,
+    variableMayBeUnsetState = True
 }
 
 mergeVariableState a b = VariableState {
     variableValue = mergeVariableValue (variableValue a) (variableValue b),
-    variableProperties = S.union (variableProperties a) (variableProperties b)
+    variableProperties = S.union (variableProperties a) (variableProperties b),
+    variableMayBeUnsetState =
+        variableMayBeUnsetState a || variableMayBeUnsetState b
 }
 
 mergeVariableValue a b = VariableValue {
@@ -463,6 +486,7 @@ patchState base diff =
                 sLocalValues = vmPatch (sLocalValues base) (sLocalValues diff),
                 sPrefixValues = vmPatch (sPrefixValues base) (sPrefixValues diff),
                 sFunctionTargets = vmPatch (sFunctionTargets base) (sFunctionTargets diff),
+                sNounset = sNounset diff `mplus` sNounset base,
                 sExitCodes = sExitCodes diff `mplus` sExitCodes base,
                 sIsReachable = sIsReachable diff `mplus` sIsReachable base
             }
@@ -508,6 +532,7 @@ mergeState ctx a b = do
                 locals <- mergeMaps ctx mergeVariableState readVariable (sLocalValues a) (sLocalValues b)
                 prefix <- mergeMaps ctx mergeVariableState readVariable (sPrefixValues a) (sPrefixValues b)
                 funcs <- mergeMaps ctx S.union readFunction (sFunctionTargets a) (sFunctionTargets b)
+                nounset <- mergeNounset ctx (sNounset a) (sNounset b)
                 exitCodes <- mergeMaybes ctx S.union readExitCodes (sExitCodes a) (sExitCodes b)
                 return $ InternalState {
                     sVersion = -1,
@@ -515,9 +540,19 @@ mergeState ctx a b = do
                     sLocalValues = locals,
                     sPrefixValues = prefix,
                     sFunctionTargets = funcs,
+                    sNounset = nounset,
                     sExitCodes = exitCodes,
                     sIsReachable = liftM2 (&&) (sIsReachable a) (sIsReachable b)
                 }
+
+    mergeNounset _ Nothing Nothing = return Nothing
+    mergeNounset ctx a b = do
+        outer <- readNounset ctx
+        let resolve = fromMaybe outer
+        return $ Just $
+            if resolve a == resolve b
+            then resolve a
+            else NounsetUnknown
 
 -- Merge a number of states, or return a default if there are no states
 -- (it can't fold from newInternalState because this would be equivalent of adding a new input edge).
@@ -622,6 +657,7 @@ stateIsSlowEqual a b =
     && check sLocalValues
     && check sPrefixValues
     && check sFunctionTargets
+    && check sNounset
     && check sIsReachable
   where
     check f = f a == f b
@@ -691,19 +727,35 @@ updateVariableValue ctx name val = do
                 GlobalScope -> writeGlobal
                 LocalScope -> writeLocal
                 PrefixScope -> writeLocal -- Updates become local
-    f ctx name $ VariableState { variableValue = val, variableProperties = props }
+    f ctx name $ VariableState {
+        variableValue = val,
+        variableProperties = props,
+        variableMayBeUnsetState = False
+    }
 
 updateGlobalValue ctx name val = do
     props <- readGlobalProperties ctx name
-    writeGlobal ctx name VariableState { variableValue = val, variableProperties = props }
+    writeGlobal ctx name VariableState {
+        variableValue = val,
+        variableProperties = props,
+        variableMayBeUnsetState = False
+    }
 
 updateLocalValue ctx name val = do
     props <- readLocalProperties ctx name
-    writeLocal ctx name VariableState { variableValue = val, variableProperties = props }
+    writeLocal ctx name VariableState {
+        variableValue = val,
+        variableProperties = props,
+        variableMayBeUnsetState = False
+    }
 
 updatePrefixValue ctx name val = do
     -- Prefix variables don't inherit properties
-    writePrefix ctx name VariableState { variableValue = val, variableProperties = defaultProperties }
+    writePrefix ctx name VariableState {
+        variableValue = val,
+        variableProperties = defaultProperties,
+        variableMayBeUnsetState = False
+    }
 
 
 -- Look up a variable value, and also return its scope
@@ -792,6 +844,12 @@ readExitCodes ctx = lookupStack get dep def ctx ()
     def = S.empty
     dep () v = DepExitCodes v
 
+readNounset ctx = lookupStack get dep def ctx ()
+  where
+    get s () = sNounset s
+    def = NounsetDisabled
+    dep () status = DepNounset status
+
 -- Look up each state on the stack until a value is found (or the default is used),
 -- then add this value as a StateDependency.
 lookupStack' :: forall s k v.
@@ -853,6 +911,7 @@ fulfillsDependency ctx entry dep =
         DepIsRecursive node val | node == entry -> return True
         DepIsRecursive node val -> return $ val == any (\f -> entryPoint f == node) (cStack ctx)
         DepExitCodes val -> (== val) <$> peekStack (\s k -> sExitCodes s) S.empty ctx ()
+        DepNounset val -> (== val) <$> peekStack (\s k -> sNounset s) NounsetDisabled ctx ()
   --      _ -> error $ "Unknown dep " ++ show dep
   where
     peek scope = peekStack getVariableWithScope $ if scope == GlobalScope then (unknownVariableState, GlobalScope) else (unsetVariableState, LocalScope)
@@ -1095,6 +1154,7 @@ transferEffect ctx effect =
             case name of
                 "?" -> void $ readExitCodes ctx
                 _ -> void $ readVariable ctx name
+        CFReadNounset -> void $ readNounset ctx
         CFWriteVariable name value -> do
             val <- cfValueToVariableValue ctx value
             updateVariableValue ctx name val
@@ -1107,6 +1167,13 @@ transferEffect ctx effect =
         CFWritePrefix name value -> do
             val <- cfValueToVariableValue ctx value
             updatePrefixValue ctx name val
+
+        CFSetNounset enabled ->
+            modifySTRef (cOutput ctx) $ \state ->
+                modified state {
+                    sNounset = Just $
+                        if enabled then NounsetEnabled else NounsetDisabled
+                }
 
         CFSetProps scope name props ->
             case scope of

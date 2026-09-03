@@ -119,6 +119,8 @@ data CFEffect =
     | CFWriteGlobal String CFValue
     | CFWriteLocal String CFValue
     | CFWritePrefix String CFValue
+    | CFReadNounset
+    | CFSetNounset Bool
     | CFDefineFunction String Id Node Node
     | CFUndefine String
     | CFUndefineVariable String
@@ -454,6 +456,13 @@ buildRoot t = under (getId t) $ do
 
 applySingle e = CFApplyEffects [e]
 
+shebangEnablesNounset shebang = fromMaybe False $ do
+    value <- getLiteralString shebang
+    return $ any isNounsetFlag $ drop 1 $ words value
+  where
+    isNounsetFlag flag =
+        "-" `isPrefixOf` flag && not ("--" `isPrefixOf` flag) && 'u' `elem` drop 1 flag
+
 -- Build the CFG.
 build :: Token -> CFM Range
 build t = do
@@ -463,8 +472,13 @@ build t = do
   where
     build' t = case t of
         T_Annotation _ _ list -> build list
-        T_Script _ _ list -> do
-            sequentially list
+        T_Script _ shebang list -> do
+            nounset <-
+                if shebangEnablesNounset shebang
+                then newNodeRange $ applySingle $ IdTagged (getId shebang) $ CFSetNounset True
+                else none
+            body <- sequentially list
+            linkRanges [nounset, body]
 
         TA_Assignment id op var@(TA_Variable _ name indices) rhs -> do
             -- value first: (( var[x=1] = (x=2) )) runs x=1 last
@@ -504,12 +518,13 @@ build t = do
 
         TA_Variable id name indices -> do
             subscript <- sequentially indices
+            nounset <- newNodeRange $ applySingle $ IdTagged id CFReadNounset
             hint <-
                 if null indices
                 then none
                 else nodeToRange <$> newNode (applySingle $ IdTagged id $ CFHintArray name)
             read <- nodeToRange <$> newNode (applySingle $ IdTagged id $ CFReadVariable name)
-            linkRanges [subscript, hint, read]
+            linkRanges [subscript, nounset, hint, read]
 
         TA_Unary id op (TA_Variable _ name indices) | "--" `isInfixOf` op || "++" `isInfixOf` op -> do
             subscript <- sequentially indices
@@ -713,8 +728,9 @@ build t = do
             let indices = getIndexReferences str
             let offsets = getOffsetReferences str
             vals <- build t
+            nounset <- newNodeRange $ applySingle $ IdTagged id CFReadNounset
             others <- mapM (\x -> nodeToRange <$> newNode (applySingle $ IdTagged id $ CFReadVariable x)) (indices ++ offsets)
-            deps <- linkRanges (vals:others)
+            deps <- linkRanges (vals:nounset:others)
             read <- nodeToRange <$> newNode (applySingle $ IdTagged id $ CFReadVariable reference)
             totalRead <- linkRange deps read
 
@@ -945,6 +961,7 @@ handleCommand cmd vars args literalCmd = do
         Just "exit" -> regularExpansion vars (NE.toList args) $ handleExit
         Just "return" -> regularExpansion vars (NE.toList args) $ handleReturn
         Just "unset" -> regularExpansionWithStatus vars args $ handleUnset args
+        Just "set" -> regularExpansionWithStatus vars args $ handleSet args
 
         Just "declare" -> handleDeclare args
         Just "local" -> handleDeclare args
@@ -1016,6 +1033,22 @@ handleCommand cmd vars args literalCmd = do
         literalNames = mapMaybe (\(_, t) -> (,) t <$> getLiteralString t) names
         -- Apply a constructor like CFUndefineVariable to each literalName, and tag with its id
         unsetWith c = newNodeRange $ CFApplyEffects $ map (\(token, name) -> IdTagged (getId token) $ c name) literalNames
+
+    handleSet (cmd NE.:| args) =
+        newNodeRange $ CFApplyEffects $ maybeToList $ do
+            enabled <- nounsetSetting $ mapMaybe getLiteralString args
+            return $ IdTagged (getId cmd) $ CFSetNounset enabled
+
+    nounsetSetting = go Nothing
+      where
+        go current [] = current
+        go current ("--":_) = current
+        go _ ("-o":"nounset":rest) = go (Just True) rest
+        go _ ("+o":"nounset":rest) = go (Just False) rest
+        go current (arg:rest)
+            | "-" `isPrefixOf` arg && 'u' `elem` drop 1 arg = go (Just True) rest
+            | "+" `isPrefixOf` arg && 'u' `elem` drop 1 arg = go (Just False) rest
+            | otherwise = go current rest
 
 
     variableAssignRegex = mkRegex "^([_a-zA-Z][_a-zA-Z0-9]*)="
