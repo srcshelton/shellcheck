@@ -389,6 +389,14 @@ verifyCodes f l s = codes == Just l
     comments = runAndGetComments treeCheck s
     codes = map (cCode . tcComment) <$> comments
 
+verifyMessage :: (Parameters -> Token -> Writer [TokenComment] ()) -> Code -> String -> String -> Bool
+verifyMessage f code message source = maybe False (any matches) comments
+  where
+    comments = runAndGetComments (runNodeAnalysis f) source
+    matches comment =
+        cCode (tcComment comment) == code
+            && cMessage (tcComment comment) == message
+
 checkNode f = producesComments (runNodeAnalysis f)
 producesComments :: (Parameters -> Token -> [TokenComment]) -> String -> Maybe Bool
 producesComments f s = not . null <$> runAndGetComments f s
@@ -634,7 +642,9 @@ prop_checkPipePitfalls20 = verifyNot checkPipePitfalls "foo | grep -B999 bar | w
 prop_checkPipePitfalls21 = verifyNot checkPipePitfalls "foo | grep --after-context 999 bar | wc -l"
 prop_checkPipePitfalls22 = verifyNot checkPipePitfalls "foo | grep -B 1 --after-context 999 bar | wc -l"
 prop_checkPipePitfalls23 = verifyNot checkPipePitfalls "ps -o pid,args -p $(pgrep java) | grep -F net.shellcheck.Test"
-prop_checkPipePitfalls3149 = verify checkPipePitfalls "find . -exec grep -Fl needle {} + | xargs -rn 1 dirname"
+prop_checkPipePitfalls3149 = verifyMessage checkPipePitfalls 2038
+    "Use NUL delimiters end-to-end (e.g. 'find .. -print0 | xargs -0 ..') to handle arbitrary filenames safely."
+    "find . -exec grep -Fl needle {} + | xargs -rn 1 dirname"
 checkPipePitfalls _ (T_Pipeline id _ commands) = do
     for ["find", "xargs"] $
         \(find:xargs:_) ->
