@@ -612,6 +612,7 @@ prop_checkPipePitfalls20 = verifyNot checkPipePitfalls "foo | grep -B999 bar | w
 prop_checkPipePitfalls21 = verifyNot checkPipePitfalls "foo | grep --after-context 999 bar | wc -l"
 prop_checkPipePitfalls22 = verifyNot checkPipePitfalls "foo | grep -B 1 --after-context 999 bar | wc -l"
 prop_checkPipePitfalls23 = verifyNot checkPipePitfalls "ps -o pid,args -p $(pgrep java) | grep -F net.shellcheck.Test"
+prop_checkPipePitfalls3149 = verify checkPipePitfalls "find . -exec grep -Fl needle {} + | xargs -rn 1 dirname"
 checkPipePitfalls _ (T_Pipeline id _ commands) = do
     for ["find", "xargs"] $
         \(find:xargs:_) ->
@@ -623,7 +624,7 @@ checkPipePitfalls _ (T_Pipeline id _ commands) = do
                 hasParameter "print0",
                 hasParameter "printf"
               ]) $ warn (getId find) 2038
-                      "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."
+                      "Use NUL delimiters end-to-end (e.g. 'find .. -print0 | xargs -0 ..') to handle arbitrary filenames safely."
 
     for ["ps", "grep"] $
         \(ps:grep:_) ->

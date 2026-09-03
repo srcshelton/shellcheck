@@ -18,6 +18,8 @@
 ### Changed
 
 ### Fixed
+- SC2038 now recommends NUL delimiters end-to-end instead of suggesting
+  `find -exec`, whose invoked command may still emit newline-delimited names.
 
 ### Removed
 - SC3003: removed since ANSI C string is specified in POSIX.1-2024
