@@ -29,6 +29,8 @@
 ### Changed
 - SC2106 now identifies the ineffective loop-control keyword and explains that
   the parent loop continues.
+- SC2064 is now an informational request to verify intent when a trap action
+  explicitly mixes immediate expansions with escaped, signal-time expansions.
 
 ### Fixed
 - Variables read from literal trap actions are now recognized in arithmetic

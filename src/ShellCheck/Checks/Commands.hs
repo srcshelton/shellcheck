@@ -61,6 +61,13 @@ data CommandCheck =
 verify :: CommandCheck -> String -> Bool
 verify f s = producesComments (getChecker [f]) s == Just True
 verifyNot f s = producesComments (getChecker [f]) s == Just False
+verifySeverity severity f s = do
+    let parsed = pScript s
+    root <- prRoot parsed
+    let spec = defaultSpec parsed
+    let params = makeParameters spec
+    let comments = filterByAnnotation spec params $ runChecker params (getChecker [f])
+    return $ not (null comments) && all ((== severity) . cSeverity . tcComment) comments
 
 commandChecks :: [CommandCheck]
 commandChecks = [
@@ -404,17 +411,40 @@ prop_checkTrapQuotes1 = verify checkTrapQuotes "trap \"echo $num\" INT"
 prop_checkTrapQuotes1a = verify checkTrapQuotes "trap \"echo `ls`\" INT"
 prop_checkTrapQuotes2 = verifyNot checkTrapQuotes "trap 'echo $num' INT"
 prop_checkTrapQuotes3 = verify checkTrapQuotes "trap \"echo $((1+num))\" EXIT DEBUG"
+prop_checkTrapQuotes4 = verifyNot checkTrapQuotes "trap \"echo \\$status\" EXIT"
+prop_checkTrapQuotes5 = verifySeverity InfoC checkTrapQuotes "trap \"rm -f '$tmp'; status=\\$?; echo \\$status\" EXIT" == Just True
+prop_checkTrapQuotes6 = verifySeverity InfoC checkTrapQuotes "trap \"rm -f '$tmp'; echo \\${status}\" EXIT" == Just True
+prop_checkTrapQuotes7 = verifySeverity InfoC checkTrapQuotes "trap \"echo $((now)); echo \\$?\" EXIT" == Just True
+prop_checkTrapQuotes8 = verifySeverity InfoC checkTrapQuotes "trap \"echo $now; echo \\$(date)\" EXIT" == Just True
+prop_checkTrapQuotes9 = verifySeverity WarningC checkTrapQuotes "trap \"echo $now; echo \\$\" EXIT" == Just True
 checkTrapQuotes = CommandCheck (Exactly "trap") (f . arguments) where
     f (x:_) = checkTrap x
     f _ = return ()
-    checkTrap (T_NormalWord _ [T_DoubleQuoted _ rs]) = mapM_ checkExpansions rs
+    checkTrap (T_NormalWord _ [T_DoubleQuoted _ rs]) =
+        mapM_ (checkExpansions $ reporter rs) rs
     checkTrap _ = return ()
-    warning id = warn id 2064 "Use single quotes, otherwise this expands now rather than when signalled."
-    checkExpansions (T_DollarExpansion id _) = warning id
-    checkExpansions (T_Backticked id _) = warning id
-    checkExpansions (T_DollarBraced id _ _) = warning id
-    checkExpansions (T_DollarArithmetic id _) = warning id
-    checkExpansions _ = return ()
+    reporter parts
+        | any hasDeferredExpansion parts = \id -> info id 2064
+            "This expands now, while another part expands when signalled. Verify that this mixed timing is intentional."
+        | otherwise = \id -> warn id 2064
+            "Use single quotes, otherwise this expands now rather than when signalled."
+    checkExpansions report (T_DollarExpansion id _) = report id
+    checkExpansions report (T_Backticked id _) = report id
+    checkExpansions report (T_DollarBraced id _ _) = report id
+    checkExpansions report (T_DollarArithmetic id _) = report id
+    checkExpansions _ _ = return ()
+
+    -- Within double quotes, an escaped '$' or backtick is represented as
+    -- literal text. A recognizable expansion in such text is therefore an
+    -- explicit request to defer that part until the trap runs.
+    hasDeferredExpansion (T_Literal _ str) = hasDeferredDollar str || hasDeferredBackticks str
+    hasDeferredExpansion _ = False
+    hasDeferredDollar ('$':next:rest)
+        | isAlphaNum next || next `elem` "_{(?!#$*@-" = True
+        | otherwise = hasDeferredDollar (next:rest)
+    hasDeferredDollar (_:rest) = hasDeferredDollar rest
+    hasDeferredDollar [] = False
+    hasDeferredBackticks str = length (filter (== '`') str) >= 2
 
 
 prop_checkReturn1 = verifyNot checkReturn "return"
