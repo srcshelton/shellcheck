@@ -173,6 +173,43 @@ prop_optionalExamplesWorkThroughChecker = all checkOptional optionalChecks
         in length (checkWithOption name positive) > length (check positive)
             && checkWithOption name negative == check negative
 
+prop_forkOptionalsUseExpectedSeverity = all hasExpectedSeverity cases
+  where
+    hasExpectedSeverity (option, code, severity, source) =
+        any matches $ commentsWithOption option source
+      where
+        matches positioned =
+            let comment = pcComment positioned
+            in cCode comment == code && cSeverity comment == severity
+    cases =
+        [ ("check-unused-suppressions", 2337, StyleC,
+            "# shellcheck disable=SC2086\necho \"$var\"")
+        , ("prefer-single-quotes", 2338, StyleC, "var=\"constant\"")
+        , ("require-quoted-parameter-expansion-words", 2339, StyleC,
+            "echo \"${var:-default}\"")
+        , ("require-single-quoted-case-patterns", 2340, StyleC,
+            "case $var in value*) echo yes;; esac")
+        , ("prefer-env-shebangs", 2341, StyleC, "#!/bin/bash\ntrue")
+        , ("require-shebang-space", 2342, StyleC, "#!/bin/sh\ntrue")
+        , ("require-variable-quotes", 2343, StyleC, "[[ ${var} ]]")
+        , ("check-unbound-variables", 2344, InfoC, "set -u; echo \"$var\"")
+        , ("check-exit-in-subshell", 2345, WarningC,
+            "input | while read -r line; do exit 1; done")
+        , ("require-final-case-terminator", 2346, StyleC,
+            "case $var in value) echo yes; esac")
+        , ("require-double-brackets", 2292, StyleC, "[ -e /etc/issue ]")
+        , ("add-default-case", 2249, InfoC,
+            "case $? in 0) echo 'Success';; esac")
+        ]
+    commentsWithOption option source =
+        crComments $ runIdentity $ checkScript
+            (mockedSystemInterface [])
+            emptyCheckSpec {
+                csScript = source,
+                csExcludedWarnings = [2148],
+                csOptionalChecks = [option]
+            }
+
 checkWithRc rc = getErrors
     (mockRcFile rc $ mockedSystemInterface [])
 
