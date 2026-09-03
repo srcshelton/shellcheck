@@ -284,6 +284,8 @@ checkShVariant variant src =
 prop_shVariantRemapsGenericShParser =
     null $ intersect [1072, 1073] $
         checkShVariant IrixSh "#!/bin/sh\ncase value {\nvalue) echo yes;;\n}"
+prop_shVariantRemapsSbinSh =
+    3068 `elem` checkShVariant IrixSh "#!/sbin/sh\nvalue=$(echo hi)"
 prop_shVariantRemapsGenericShAnalyzer =
     3068 `elem` checkShVariant IrixSh "#!/bin/sh\nvalue=$(echo hi)"
 prop_shVariantDoesNotRemapExplicitBash =
