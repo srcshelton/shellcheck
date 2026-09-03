@@ -160,6 +160,8 @@ data Context =
         | ContextSource String
     deriving (Show)
 
+data Suppressor = DirectiveSuppressor Id | OtherSuppressor
+
 data HereDocContext =
         HereDocPending Id Dashed Quoted String [Context] -- on linefeed, read this T_HereDoc
     deriving (Show)
@@ -259,33 +261,51 @@ getMap = positionMap <$> getState
 getParseNotes = parseNotes <$> getState
 
 addParseNote n = do
-    irrelevant <- shouldIgnoreCode (codeForParseNote n)
-    unless irrelevant $ do
-        state <- getState
-        putState $ state {
-            parseNotes = n : parseNotes state
-        }
+    suppressor <- getSuppressor (codeForParseNote n)
+    case suppressor of
+        Nothing -> do
+            state <- getState
+            putState $ state {
+                parseNotes = n : parseNotes state
+            }
+        Just (DirectiveSuppressor id) -> markDirectiveUsed id
+        Just OtherSuppressor -> return ()
 
 ignoreProblemsOf p = do
     systemState <- lift . lift $ Ms.get
     p <* (lift . lift . Ms.put $ systemState)
 
 shouldIgnoreCode code = do
+    isJust <$> getSuppressor code
+
+getSuppressor code = do
     context <- getCurrentContexts
-    checkSourced <- Mr.asks checkSourced
-    return $ any (contextItemDisablesCode checkSourced code) context
+    alsoCheckSourced <- Mr.asks checkSourced
+    return $ listToMaybe $ mapMaybe (contextItemSuppressor alsoCheckSourced code) context
+
+markDirectiveUsed id =
+    Ms.modify (\state -> state {
+        usedDisableDirectives = id : usedDisableDirectives state
+    })
 
 -- Does this item on the context stack disable warnings for 'code'?
 contextItemDisablesCode :: Bool -> Integer -> Context -> Bool
-contextItemDisablesCode alsoCheckSourced code = disabling alsoCheckSourced
+contextItemDisablesCode alsoCheckSourced code =
+    isJust . contextItemSuppressor alsoCheckSourced code
+
+contextItemSuppressor :: Bool -> Integer -> Context -> Maybe Suppressor
+contextItemSuppressor alsoCheckSourced code = disabling alsoCheckSourced
   where
     disabling checkSourced item =
         case item of
-            ContextAnnotation list -> any disabling' list
-            ContextSource _ -> not $ checkSourced
-            _ -> False
-    disabling' (DisableComment n m) = code >= n && code < m
-    disabling' _ = False
+            ContextAnnotation list -> listToMaybe $ mapMaybe disabling' list
+            ContextSource _ | not checkSourced -> Just OtherSuppressor
+            _ -> Nothing
+    disabling' (DisableComment n m)
+        | code >= n && code < m = Just OtherSuppressor
+    disabling' (DisableCommentWithId sourceId n m)
+        | code >= n && code < m = Just $ DirectiveSuppressor sourceId
+    disabling' _ = Nothing
 
 
 
@@ -331,11 +351,13 @@ getSourceOverride = do
 
 data SystemState = SystemState {
     contextStack :: [Context],
-    parseProblems :: [ParseNote]
+    parseProblems :: [ParseNote],
+    usedDisableDirectives :: [Id]
 }
 initialSystemState = SystemState {
     contextStack = [],
-    parseProblems = []
+    parseProblems = [],
+    usedDisableDirectives = []
 }
 
 data Environment m = Environment {
@@ -367,9 +389,11 @@ pushContext c = do
     setCurrentContexts (c:v)
 
 parseProblemAtWithEnd start end level code msg = do
-    irrelevant <- shouldIgnoreCode code
-    unless irrelevant $
-        addParseProblem note
+    suppressor <- getSuppressor code
+    case suppressor of
+        Nothing -> addParseProblem note
+        Just (DirectiveSuppressor id) -> markDirectiveUsed id
+        Just OtherSuppressor -> return ()
   where
     note = ParseNote start end level code msg
 
@@ -1027,12 +1051,22 @@ readAnnotationWithoutPrefix sandboxed = do
               where
                 readElement = readRange <|> readAll
                 readAll = do
+                    start <- startSpan
                     string "all"
-                    return $ DisableComment 0 1000000
+                    if sandboxed
+                    then do
+                        sourceId <- endSpan start
+                        return $ DisableCommentWithId sourceId 0 1000000
+                    else return $ DisableComment 0 1000000
                 readRange = do
+                    start <- startSpan
                     from <- readCode
                     to <- choice [ char '-' *> readCode, return $ from+1 ]
-                    return $ DisableComment from to
+                    if sandboxed
+                    then do
+                        sourceId <- endSpan start
+                        return $ DisableCommentWithId sourceId from to
+                    else return $ DisableComment from to
                 readCode = do
                     optional $ string "SC"
                     int <- many1 digit
@@ -3526,7 +3560,8 @@ parseShell env name contents = do
             return newParseResult {
                 prComments = map toPositionedComment $ nub $ parseNotes userstate ++ parseProblems state,
                 prTokenPositions = Map.map startEndPosToPos (positionMap userstate),
-                prRoot = Just script
+                prRoot = Just script,
+                prUsedDisableDirectives = nub $ usedDisableDirectives state
             }
         Left err -> do
             let context = contextStack state
@@ -3538,7 +3573,8 @@ parseShell env name contents = do
                             ++ [makeErrorFor err])
                         ++ parseProblems state,
                 prTokenPositions = Map.empty,
-                prRoot = Nothing
+                prRoot = Nothing,
+                prUsedDisableDirectives = nub $ usedDisableDirectives state
             }
   where
     -- A final pass for ignoring parse errors after failed parsing

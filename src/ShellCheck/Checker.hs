@@ -89,7 +89,8 @@ checkScript sys spec = do
                     asExecutionMode = Executed,
                     asTokenPositions = tokenPositions,
                     asExtendedAnalysis = csExtendedAnalysis spec,
-                    asOptionalChecks = getEnableDirectives root ++ csOptionalChecks spec
+                    asOptionalChecks = getEnableDirectives root ++ csOptionalChecks spec,
+                    asUsedDisableDirectives = prUsedDisableDirectives result
                 } where as = newAnalysisSpec root
         let analysisMessages =
                 maybe []
@@ -178,6 +179,36 @@ prop_commentDisablesAnalysisIssue1 =
     null $ check "#shellcheck disable=SC2086\necho $1"
 prop_commentDisablesAnalysisIssue2 =
     null $ check "#shellcheck disable=SC2086\n#lol\necho $1"
+
+checkUnusedSuppressions src =
+    getErrors
+        (mockedSystemInterface [])
+        emptyCheckSpec {
+            csScript = src,
+            csExcludedWarnings = [2148],
+            csOptionalChecks = ["check-unused-suppressions"]
+        }
+
+prop_findsUnusedAnalysisSuppression =
+    [2337] == checkUnusedSuppressions "# shellcheck disable=SC2086\necho \"$1\""
+prop_acceptsUsedAnalysisSuppression =
+    null $ checkUnusedSuppressions "# shellcheck disable=SC2086\necho $1"
+prop_acceptsSuppressionConsultedDuringAnalysis =
+    null $ checkUnusedSuppressions "# shellcheck disable=SC2120\nf() { echo \"$1\"; }; f"
+prop_findsUnusedParseSuppression =
+    [2337] == checkUnusedSuppressions "# shellcheck disable=SC1037\necho \"${12}\""
+prop_acceptsUsedParseSuppression =
+    null $ checkUnusedSuppressions "# shellcheck disable=SC1037\necho \"$12\""
+prop_checksEachSuppressionIndividually =
+    [2337] == checkUnusedSuppressions "# shellcheck disable=SC2086,SC2154\necho $1"
+prop_fileDirectiveCanEnableUnusedSuppressionCheck =
+    [2337] == check "# shellcheck enable=check-unused-suppressions disable=SC2086\necho \"$1\""
+prop_doesNotReportRcSuppressionsAsUnused = null result
+  where
+    result = checkWithRc "enable=check-unused-suppressions\ndisable=2086" emptyCheckSpec {
+        csScript = "#!/bin/sh\necho \"$1\"",
+        csIgnoreRC = False
+    }
 
 prop_optionDisablesIssue1 =
     null $ getErrors

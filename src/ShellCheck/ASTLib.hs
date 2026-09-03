@@ -762,6 +762,7 @@ isAnnotationIgnoringCode code t =
         _ -> False
   where
     hasNum (DisableComment from to) = code >= from && code < to
+    hasNum (DisableCommentWithId _ from to) = code >= from && code < to
     hasNum _                   = False
 
 prop_executableFromShebang1 = executableFromShebang "/bin/sh" == "sh"

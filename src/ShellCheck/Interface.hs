@@ -24,8 +24,8 @@ module ShellCheck.Interface
     , CheckSpec(csFilename, csScript, csCheckSourced, csIncludedWarnings, csExcludedWarnings, csShellTypeOverride, csMinSeverity, csIgnoreRC, csExtendedAnalysis, csOptionalChecks)
     , CheckResult(crFilename, crComments)
     , ParseSpec(psFilename, psScript, psCheckSourced, psIgnoreRC, psShellTypeOverride)
-    , ParseResult(prComments, prTokenPositions, prRoot)
-    , AnalysisSpec(asScript, asShellType, asFallbackShell, asExecutionMode, asCheckSourced, asTokenPositions, asExtendedAnalysis, asOptionalChecks)
+    , ParseResult(prComments, prTokenPositions, prRoot, prUsedDisableDirectives)
+    , AnalysisSpec(asScript, asShellType, asFallbackShell, asExecutionMode, asCheckSourced, asTokenPositions, asExtendedAnalysis, asOptionalChecks, asUsedDisableDirectives)
     , AnalysisResult(arComments)
     , FormatterOptions(foColorOption, foWikiLinkCount)
     , Shell(Ksh, Sh, Bash, Dash, BusyboxSh)
@@ -158,14 +158,16 @@ data ParseSpec = ParseSpec {
 data ParseResult = ParseResult {
     prComments :: [PositionedComment],
     prTokenPositions :: Map.Map Id (Position, Position),
-    prRoot :: Maybe Token
+    prRoot :: Maybe Token,
+    prUsedDisableDirectives :: [Id]
 } deriving (Show, Eq)
 
 newParseResult :: ParseResult
 newParseResult = ParseResult {
     prComments = [],
     prTokenPositions = Map.empty,
-    prRoot = Nothing
+    prRoot = Nothing,
+    prUsedDisableDirectives = []
 }
 
 -- Analyzer input and output
@@ -177,7 +179,8 @@ data AnalysisSpec = AnalysisSpec {
     asCheckSourced :: Bool,
     asOptionalChecks :: [String],
     asExtendedAnalysis :: Maybe Bool,
-    asTokenPositions :: Map.Map Id (Position, Position)
+    asTokenPositions :: Map.Map Id (Position, Position),
+    asUsedDisableDirectives :: [Id]
 }
 
 newAnalysisSpec token = AnalysisSpec {
@@ -188,7 +191,8 @@ newAnalysisSpec token = AnalysisSpec {
     asCheckSourced = False,
     asOptionalChecks = [],
     asExtendedAnalysis = Nothing,
-    asTokenPositions = Map.empty
+    asTokenPositions = Map.empty,
+    asUsedDisableDirectives = []
 }
 
 newtype AnalysisResult = AnalysisResult {

@@ -1,5 +1,7 @@
 ## v0.11.0-irix - 2026-09-04
 ### Added
+- SC2337: Optional `check-unused-suppressions` suggestion for unnecessary
+  `disable` directives.
 
 ### Changed
 

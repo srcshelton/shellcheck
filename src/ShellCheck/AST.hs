@@ -148,6 +148,7 @@ data InnerToken t =
 
 data Annotation =
     DisableComment Integer Integer -- [from, to)
+    | DisableCommentWithId Id Integer Integer -- source id, [from, to)
     | EnableComment String
     | SourceOverride String
     | ShellOverride String
