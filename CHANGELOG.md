@@ -31,6 +31,8 @@
   the parent loop continues.
 
 ### Fixed
+- Variables read from literal trap actions are now recognized in arithmetic
+  and other shell syntax, rather than only in `$name` expansions.
 - SC2127 no longer reports the POSIX.1-2024 `;&` case-clause terminator for
   generic POSIX `sh`; explicit older shell dialects remain checked.
 - SC2038 now recommends NUL delimiters end-to-end instead of suggesting

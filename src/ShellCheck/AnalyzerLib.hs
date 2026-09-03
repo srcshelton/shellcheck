@@ -515,7 +515,9 @@ getVariableFlow params t =
     assignFirst _             = False
 
     setRead t =
-        let read    = getReferencedVariables (parentMap params) t
+        let read =
+                getReferencedVariables (parentMap params) t
+                ++ getTrapBodyReferences (shellType params) t
         in mapM_ (\v -> modify (Reference v:)) read
 
     setWritten t =
@@ -644,6 +646,39 @@ getReferencedVariableCommand base@(T_SimpleCommand _ _ (T_NormalWord _ (T_Litera
     flags = map snd $ getAllFlags base
 
 getReferencedVariableCommand _ = []
+
+-- A literal trap action is shell code which runs later. Parsing it lets us
+-- recognize reads in arithmetic and other contexts which the deliberately
+-- simple literal-variable scan above cannot see. Keep the outer trap tokens in
+-- the result so any diagnostics still point at the user's script rather than
+-- at the separately parsed snippet.
+getTrapBodyReferences shell base@(T_SimpleCommand _ _ (T_NormalWord _ (T_Literal _ "trap":_):action:_)) =
+    case getLiteralString action of
+        Just script
+            | script /= "-"
+            , null (prComments parsed)
+            , Just root <- prRoot parsed ->
+                [ (base, action, name)
+                | name <- nub $ collectReferences root
+                , name `notElem` literalReferences
+                ]
+          where
+            parsed = runIdentity $ parseScript (mockedSystemInterface []) newParseSpec {
+                psFilename = "trap action",
+                psScript = script,
+                psIgnoreRC = True,
+                psShellTypeOverride = Just shell
+            }
+            literalReferences = getVariablesFromLiteralToken action
+        _ -> []
+  where
+    collectReferences root =
+        map (\(_, _, name) -> name) $
+            execState (void $ doAnalysis collect root) []
+      where
+        parents = getParentTree root
+        collect token = modify (getReferencedVariables parents token ++)
+getTrapBodyReferences _ _ = []
 
 -- The function returns a tuple consisting of four items describing an assignment.
 -- Given e.g. declare foo=bar
