@@ -3408,10 +3408,13 @@ checkTildeInPath _ (T_SimpleCommand _ vars _) =
     isQuoted _ = False
 checkTildeInPath _ _ = return ()
 
-prop_checkUnsupported3 = verify checkUnsupported "#!/bin/sh\ncase foo in bar) baz ;& esac"
+prop_checkUnsupported3 = verifyNot checkUnsupported "#!/bin/sh\ncase foo in bar) baz ;& esac"
 prop_checkUnsupported4 = verify checkUnsupported "#!/bin/ksh\ncase foo in bar) baz ;;& esac"
 prop_checkUnsupported5 = verifyNot checkUnsupported "#!/bin/bash\necho \"${ ls; }\""
 prop_checkUnsupported6 = verify checkUnsupported "#!/bin/ash\necho \"${ ls; }\""
+prop_checkUnsupported7 = verify checkUnsupported "#!/bin/dash\ncase foo in bar) baz ;& esac"
+prop_checkUnsupported8 = verify checkUnsupported "# shellcheck shell=irix-sh\ncase foo in bar) baz ;& esac"
+prop_checkUnsupported9 = verify checkUnsupported "#!/bin/sh\ncase foo in bar) baz ;;& esac"
 checkUnsupported params t =
     unless (null support || (shellType params `elem` support)) $
         report name
@@ -3429,7 +3432,7 @@ shellSupport t =
     _ -> ("", [])
   where
     forCase seps | CaseContinue `elem` seps = ("cases with ;;&", [Bash])
-    forCase seps | CaseFallThrough `elem` seps = ("cases with ;&", [Bash, Ksh])
+    forCase seps | CaseFallThrough `elem` seps = ("cases with ;&", [Sh, Bash, Ksh])
     forCase _ = ("", [])
 
 

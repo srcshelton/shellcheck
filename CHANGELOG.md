@@ -31,6 +31,8 @@
   the parent loop continues.
 
 ### Fixed
+- SC2127 no longer reports the POSIX.1-2024 `;&` case-clause terminator for
+  generic POSIX `sh`; explicit older shell dialects remain checked.
 - SC2038 now recommends NUL delimiters end-to-end instead of suggesting
   `find -exec`, whose invoked command may still emit newline-delimited names.
 - SC2227 is now limited to redirections lexically inside `find` command actions.
