@@ -29,6 +29,7 @@ import ShellCheck.AnalyzerLib hiding (producesComments)
 import ShellCheck.CFG
 import qualified ShellCheck.CFGAnalysis as CF
 import ShellCheck.Data
+import ShellCheck.Fixer (applyFix)
 import ShellCheck.Parser
 import ShellCheck.Prelude
 import ShellCheck.Interface
@@ -40,6 +41,7 @@ import Control.Monad.Identity
 import Control.Monad.State
 import Control.Monad.Writer hiding ((<>))
 import Control.Monad.Reader
+import Data.Array (listArray)
 import Data.Char
 import Data.Functor
 import Data.Function (on)
@@ -5176,8 +5178,8 @@ prop_checkRequireDoubleBracket1 = verifyTree checkRequireDoubleBracket "[ -x foo
 prop_checkRequireDoubleBracket2 = verifyTree checkRequireDoubleBracket "[ foo -o bar ]"
 prop_checkRequireDoubleBracket3 = verifyNotTree checkRequireDoubleBracket "#!/bin/sh\n[ -x foo ]"
 prop_checkRequireDoubleBracket4 = verifyNotTree checkRequireDoubleBracket "[[ -x foo ]]"
-prop_checkRequireDoubleBracket5 = hasFixCount 2 "[ -n foo ]"
-prop_checkRequireDoubleBracket6 = hasFixCount 1 "[ -n foo ]]"
+prop_checkRequireDoubleBracket5 = appliesFix "[[ -n foo ]]" "[ -n foo ]"
+prop_checkRequireDoubleBracket6 = appliesFix "[[ -n foo ]]" "[ -n foo ]]"
 checkRequireDoubleBracket params =
     if (shellType params) `elem` [Bash, Ksh, BusyboxSh]
     then nodeChecksToTreeCheck [check] params
@@ -5206,10 +5208,15 @@ checkRequireDoubleBracket params =
         TC_Nullary {} -> True
         _ -> False
 
-hasFixCount expected source =
+appliesFix expected source =
     case runAndGetComments checkRequireDoubleBracket source of
         Just comments ->
-            any ((== expected) . maybe 0 (length . fixReplacements) . tcFix) comments
+            case mapMaybe tcFix comments of
+                [] -> False
+                fixes ->
+                    let sourceLines = lines source
+                        sourceArray = listArray (1, length sourceLines) sourceLines
+                    in applyFix (mconcat fixes) sourceArray == lines expected
         Nothing -> False
 
 
