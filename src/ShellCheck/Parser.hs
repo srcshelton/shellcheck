@@ -1030,7 +1030,8 @@ readCondition = called "test expression" $ do
     when (open == "[[" && close /= "]]") $ parseProblemAt cpos ErrorC 1033 "Test expression was opened with double [[ but closed with single ]. Make sure they match."
     when (open == "[" && close /= "]" ) $ parseProblemAt opos ErrorC 1034 "Test expression was opened with single [ but closed with double ]]. Make sure they match."
     spacing
-    return $ T_Condition id typ condition
+    let closeType = if close == "]" then SingleBracket else DoubleBracket
+    return $ T_ConditionWithClosing id typ closeType condition
 
 readAnnotationPrefix = do
     char '#'

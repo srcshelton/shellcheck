@@ -5083,24 +5083,26 @@ prop_checkRequireDoubleBracket1 = verifyTree checkRequireDoubleBracket "[ -x foo
 prop_checkRequireDoubleBracket2 = verifyTree checkRequireDoubleBracket "[ foo -o bar ]"
 prop_checkRequireDoubleBracket3 = verifyNotTree checkRequireDoubleBracket "#!/bin/sh\n[ -x foo ]"
 prop_checkRequireDoubleBracket4 = verifyNotTree checkRequireDoubleBracket "[[ -x foo ]]"
+prop_checkRequireDoubleBracket5 = hasFixCount 2 "[ -n foo ]"
+prop_checkRequireDoubleBracket6 = hasFixCount 1 "[ -n foo ]]"
 checkRequireDoubleBracket params =
     if (shellType params) `elem` [Bash, Ksh, BusyboxSh]
     then nodeChecksToTreeCheck [check] params
     else const []
   where
     check _ t = case t of
-        T_Condition id SingleBracket _ ->
-            styleWithFix id 2292 "Prefer [[ ]] over [ ] for tests in Bash/Ksh/Busybox." (fixFor t)
+        T_ConditionWithClosing id SingleBracket close _ ->
+            styleWithFix id 2292 "Prefer [[ ]] over [ ] for tests in Bash/Ksh/Busybox." (fixFor close t)
         _ -> return ()
 
-    fixFor t = fixWith $
+    fixFor close t = fixWith $
         if isSimple t
         then
-            [
-                replaceStart (getId t) params 0 "[",
-                replaceEnd (getId t) params 0 "]"
-            ]
+            replaceStart (getId t) params 0 "[" : closingFix close t
         else []
+
+    closingFix SingleBracket t = [replaceEnd (getId t) params 0 "]"]
+    closingFix DoubleBracket _ = []
 
     -- We don't tag operators like < and -o well enough to replace them,
     -- so just handle the simple cases.
@@ -5110,6 +5112,12 @@ checkRequireDoubleBracket params =
         TC_Unary {} -> True
         TC_Nullary {} -> True
         _ -> False
+
+hasFixCount expected source =
+    case runAndGetComments checkRequireDoubleBracket source of
+        Just comments ->
+            any ((== expected) . maybe 0 (length . fixReplacements) . tcFix) comments
+        Nothing -> False
 
 
 prop_checkUnquotedParameterExpansionPattern1 = verify checkUnquotedParameterExpansionPattern  "echo \"${var#$x}\""

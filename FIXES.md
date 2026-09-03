@@ -9,3 +9,4 @@
 | [#751](https://github.com/koalaman/shellcheck/issues/751) | `Warn about control flow in pipeline subshells (#751)` |
 | [#289](https://github.com/koalaman/shellcheck/issues/289) | `Respect nonstandard IFS in SC2086 (#289)` |
 | [#3351](https://github.com/koalaman/shellcheck/issues/3351) | `Handle integer expansions with nonstandard IFS (#3351)` |
+| [#3447](https://github.com/koalaman/shellcheck/issues/3447) | `Avoid malformed SC2292 fixes (#3447)` |

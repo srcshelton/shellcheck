@@ -29,6 +29,8 @@
 - SC2227 is now limited to redirections lexically inside `find` command actions.
 - SC2086 now accounts for nonstandard `IFS` characters when deciding that a
   known or integer-valued expansion cannot undergo word splitting.
+- SC2292 no longer adds a third closing bracket when correcting a test which
+  already ends with mismatched `]]`.
 
 ### Removed
 - SC3003: removed since ANSI C string is specified in POSIX.1-2024
