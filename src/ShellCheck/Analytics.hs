@@ -2327,6 +2327,23 @@ prop_checkSpacefulnessCfg97 = verify checkSpacefulnessCfg "f() { case \"$1\" in 
 prop_checkSpacefulnessCfg98 = verifyNot checkSpacefulnessCfg "case \"$1\" in foo) set -u; echo $1;; esac"
 prop_checkSpacefulnessCfg99 = verifyNot checkSpacefulnessCfg "case \"$1\" in foo) set -o nounset; echo $1;; esac"
 prop_checkSpacefulnessCfg100 = verifyNot checkSpacefulnessCfg "case \"$1\" in foo) set +o nounset; echo $1;; esac"
+prop_checkSpacefulnessCfg101 = verifyNot checkSpacefulnessCfg "case \"$value\" in [0-9]) echo $value;; esac"
+prop_checkSpacefulnessCfg102 = verifyNot checkSpacefulnessCfg "case \"$value\" in item-[a-z]) echo $value;; esac"
+prop_checkSpacefulnessCfg103 = verifyNot checkSpacefulnessCfg "case \"$value\" in [0-9]|[a-f]) echo $value;; esac"
+prop_checkSpacefulnessCfg104 = verify checkSpacefulnessCfg "case \"$value\" in item-*) echo $value;; esac"
+prop_checkSpacefulnessCfg105 = verify checkSpacefulnessCfg "case \"$value\" in ?) echo $value;; esac"
+prop_checkSpacefulnessCfg106 = verify checkSpacefulnessCfg "case \"$value\" in [*?]) echo $value;; esac"
+prop_checkSpacefulnessCfg107 = verify checkSpacefulnessCfg "case \"$value\" in [!0-9]) echo $value;; esac"
+prop_checkSpacefulnessCfg108 = verifyNot checkSpacefulnessCfg "case \"$value\" in [[:alpha:]]) echo $value;; esac"
+prop_checkSpacefulnessCfg109 = verify checkSpacefulnessCfg "case \"$value\" in [[:space:]]) echo $value;; esac"
+prop_checkSpacefulnessCfg110 = verifyNot checkSpacefulnessCfg "case \"$value\" in +([0-9])) echo $value;; esac"
+prop_checkSpacefulnessCfg111 = verifyNot checkSpacefulnessCfg "case \"$value\" in @([0-9]|foo)) echo $value;; esac"
+prop_checkSpacefulnessCfg112 = verify checkSpacefulnessCfg "case \"$value\" in ?([0-9])) echo $value;; esac"
+prop_checkSpacefulnessCfg113 = verify checkSpacefulnessCfg "case \"$value\" in *([0-9])) echo $value;; esac"
+prop_checkSpacefulnessCfg114 = verify checkSpacefulnessCfg "IFS=5; case \"$value\" in [0-9]) echo $value;; esac"
+prop_checkSpacefulnessCfg115 = verifyNot checkSpacefulnessCfg "IFS=:; case \"$value\" in [0-9]) echo $value;; esac"
+prop_checkSpacefulnessCfg116 = verify checkSpacefulnessCfg "IFS=-; case \"$value\" in [a\\-z]) echo $value;; esac"
+prop_checkSpacefulnessCfg117 = verify checkSpacefulnessCfg "case \"$value\" in foo|'') echo $value;; esac"
 
 checkSpacefulnessCfg = checkSpacefulnessCfg' True
 checkVerboseSpacefulnessCfg = checkSpacefulnessCfg' False
@@ -2582,6 +2599,9 @@ prop_checkUnboundVariables14 = verifyNot checkUnboundVariables "set -o errexit; 
 prop_checkUnboundVariables15 = verify checkUnboundVariables "set -u; if condition; then set +u; fi; echo \"$var\""
 prop_checkUnboundVariables16 = verifyNot checkUnboundVariables "(set -u); echo \"$var\""
 prop_checkUnboundVariables17 = verify checkUnboundVariables "set -u; declare var; echo \"$var\""
+prop_checkUnboundVariables18 = verifyNot checkUnboundVariables "case \"$var\" in value) set -u; echo \"$var\";; esac"
+prop_checkUnboundVariables19 = verify checkUnboundVariables "case \"$var\" in '') set -u; echo \"$var\";; esac"
+prop_checkUnboundVariables20 = verifyNot checkUnboundVariables "case \"$var\" in [0-9]) set -u; echo \"$var\";; esac"
 checkUnboundVariables params token =
     case reference of
         Just name

@@ -404,6 +404,7 @@ unknownVariableValue = VariableValue {
 
 emptyVariableValue = unknownVariableValue {
     literalValue = Just "",
+    possibleCharacters = Just S.empty,
     spaceStatus = SpaceStatusEmpty,
     numericalStatus = NumericalStatusEmpty
 }
@@ -1200,16 +1201,23 @@ transferEffect ctx effect =
             val <- cfValueToVariableValue ctx value
             updateVariableValue ctx name val
         CFConstrainVariable name values -> do
-            let constrained = foldl1 mergeVariableValue $ map literalToVariableValue values
+            converted <- mapM (cfValueToVariableValue ctx) values
+            let mayMatchEmpty = or $ zipWith valueMayBeEmpty values converted
+            let mayMatchNonEmpty = any ((/= SpaceStatusEmpty) . spaceStatus) converted
+            let merged = foldl1 mergeVariableValue converted
+            let constrained =
+                    if mayMatchEmpty && mayMatchNonEmpty
+                    then merged { spaceStatus = SpaceStatusDirty }
+                    else merged
+            (current, _) <- readVariableWithScope ctx name
+            let newState = VariableState {
+                    variableValue = constrained,
+                    variableProperties = variableProperties current,
+                    variableMayBeUnsetState = mayMatchEmpty && variableMayBeUnsetState current
+                }
             if not (null name) && all isDigit name && any isFunctionCall (cStack ctx)
-                then do
-                    props <- readVariableProperties ctx name
-                    writeLocal ctx name VariableState {
-                        variableValue = constrained,
-                        variableProperties = props,
-                        variableMayBeUnsetState = False
-                    }
-                else updateVariableValue ctx name constrained
+                then writeLocal ctx name newState
+                else writeVariable ctx name newState
         CFWriteGlobal name value -> do
             val <- cfValueToVariableValue ctx value
             updateGlobalValue ctx name val
@@ -1276,6 +1284,9 @@ transferEffect ctx effect =
         CFHintArray name -> return ()
         CFHintDefined name -> return ()
 --        _ -> error $ "Unknown effect " ++ show effect
+  where
+    valueMayBeEmpty (CFValueCasePattern _ canBeEmpty _) _ = canBeEmpty
+    valueMayBeEmpty _ value = literalValue value == Just ""
 
 
 -- Transfer the CFG's idea of a value into our VariableState
@@ -1284,6 +1295,15 @@ cfValueToVariableValue ctx val =
         CFValueArray -> return unknownVariableValue -- TODO: Track array status
         CFValueComputed _ parts -> foldM f emptyVariableValue parts
         CFValueInteger -> return unknownIntegerValue
+        CFValueCasePattern chars canBeEmpty canBeNonEmpty ->
+            return unknownVariableValue {
+                possibleCharacters = chars,
+                spaceStatus = case (canBeEmpty, canBeNonEmpty) of
+                    (True, False) -> SpaceStatusEmpty
+                    (True, True) -> SpaceStatusDirty
+                    (False, True) -> SpaceStatusClean
+                    (False, False) -> SpaceStatusEmpty
+            }
         CFValueString -> return unknownVariableValue
         CFValueUninitialized -> return emptyVariableValue
 --        _ -> error $ "Unknown value: " ++ show val

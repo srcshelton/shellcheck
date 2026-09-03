@@ -31,6 +31,8 @@
   the parent loop continues.
 - SC2064 is now an informational request to verify intent when a trap action
   explicitly mixes immediate expansions with escaped, signal-time expansions.
+- SC2086 can derive safe matched-value constraints from bracket patterns and
+  non-empty extglobs in `case` arms.
 
 ### Fixed
 - Variables read from literal trap actions are now recognized in arithmetic

@@ -49,7 +49,7 @@ import Control.DeepSeq
 import Control.Monad
 import Control.Monad.Identity
 import Control.Monad.Writer (Writer, execWriter)
-import Data.Char (isDigit)
+import Data.Char (isAscii, isDigit)
 import Data.Array.Unboxed
 import Data.Array.ST
 import Data.List hiding (map)
@@ -119,7 +119,7 @@ data CFEffect =
     | CFReadVariable String
     | CFWriteVariable String CFValue
     -- Restrict a variable to the exact values which matched a case arm.
-    | CFConstrainVariable String [String]
+    | CFConstrainVariable String [CFValue]
     | CFWriteGlobal String CFValue
     | CFWriteLocal String CFValue
     | CFWritePrefix String CFValue
@@ -150,6 +150,10 @@ data CFValue =
     | CFValueString
     -- An arbitrary integer
     | CFValueInteger
+    -- An abstract value accepted by a safe case pattern. The fields are the
+    -- possible character alphabet, whether it may be empty, and whether it
+    -- may be non-empty.
+    | CFValueCasePattern (Maybe (S.Set Char)) Bool Bool
     -- Token 'Id' concatenates and assigns the given parts
     | CFValueComputed Id [CFStringPart]
   deriving (Eq, Ord, Show, Generic, NFData)
@@ -679,7 +683,7 @@ build t = do
                 c <- buildCond cond
                 constraint <- case caseVariable of
                     Just name
-                        | Just values <- mapM getLiteralString cond ->
+                        | Just values <- mapM (casePatternValue id) cond ->
                             newNodeRange $ applySingle $ IdTagged id $
                                 CFConstrainVariable name values
                     _ -> none
@@ -689,7 +693,9 @@ build t = do
 
             caseVariable = do
                 [part] <- return $ getWordParts t
-                getUnmodifiedParameterExpansion part
+                name <- getUnmodifiedParameterExpansion part
+                guard $ isVariableName name || (not (null name) && all isDigit name)
+                return name
 
             linkBranch end (typ, cond, body) (_, nextCond, nextBody) = do
                 -- Failure case
@@ -1348,6 +1354,131 @@ tokenToParts t =
         T_DollarBraced _ _ list | isUnmodifiedParameterExpansion t -> [ CFStringVariable (getBracedReference $ concat $ oversimplify list) ]
         -- Check if getLiteralString can handle it, if not it's unknown
         _ -> [maybe CFStringUnknown CFStringLiteral $ getLiteralString t]
+
+
+-- Summarize the values which can match a case pattern. We only turn wildcard
+-- patterns into constraints when every possible non-empty result is safe to
+-- expand without quotes. Exact patterns are retained even when unsafe so that
+-- they continue to produce SC2086.
+type CasePatternSummary = (Maybe (S.Set Char), Bool, Bool, Bool)
+--                           alphabet             safe  empty nonempty
+
+casePatternValue :: Id -> Token -> Maybe CFValue
+casePatternValue id token =
+    case getLiteralString token of
+        Just value -> Just $ CFValueComputed id [CFStringLiteral value]
+        Nothing -> do
+            (chars, safe, mayBeEmpty, mayBeNonEmpty) <- summarizeCasePattern token
+            guard $ safe && not mayBeEmpty && mayBeNonEmpty
+            return $ CFValueCasePattern chars mayBeEmpty mayBeNonEmpty
+
+summarizeCasePattern :: Token -> Maybe CasePatternSummary
+summarizeCasePattern token =
+    case token of
+        T_NormalWord _ parts -> summarizeSequence parts
+        T_Literal _ value -> Just $ literalPatternSummary value
+        T_SingleQuoted _ value -> Just $ literalPatternSummary value
+        T_Glob _ "*" -> Just (Nothing, False, True, True)
+        T_Glob _ "?" -> Just (Nothing, False, False, True)
+        T_Glob _ value@('[':_) -> summarizeBracketPattern value
+        T_Extglob _ op alternatives -> do
+            summary <- summarizeAlternatives alternatives
+            case op of
+                "" -> return summary
+                "@" -> return summary
+                "+" -> return summary
+                "?" -> return $ allowEmpty summary
+                "*" -> return $ allowEmpty summary
+                _ -> Nothing
+        _ -> Nothing
+  where
+    allowEmpty (chars, safe, _, nonempty) = (chars, safe, True, nonempty)
+
+summarizeSequence :: [Token] -> Maybe CasePatternSummary
+summarizeSequence parts = foldM appendSummary emptySummary =<< mapM summarizeCasePattern parts
+  where
+    emptySummary = (Just S.empty, True, True, False)
+    appendSummary (leftChars, leftSafe, leftEmpty, leftNonEmpty)
+                  (rightChars, rightSafe, rightEmpty, rightNonEmpty) =
+        Just (
+            unionCharacterSets leftChars rightChars,
+            leftSafe && rightSafe,
+            leftEmpty && rightEmpty,
+            leftNonEmpty || rightNonEmpty
+        )
+
+summarizeAlternatives :: [Token] -> Maybe CasePatternSummary
+summarizeAlternatives alternatives = do
+    first:rest <- mapM summarizeCasePattern alternatives
+    return $ foldl mergeSummary first rest
+  where
+    mergeSummary (leftChars, leftSafe, leftEmpty, leftNonEmpty)
+                 (rightChars, rightSafe, rightEmpty, rightNonEmpty) =
+        (
+            unionCharacterSets leftChars rightChars,
+            leftSafe && rightSafe,
+            leftEmpty || rightEmpty,
+            leftNonEmpty || rightNonEmpty
+        )
+
+literalPatternSummary :: String -> CasePatternSummary
+literalPatternSummary value =
+    (Just $ S.fromList value, all isSafeUnquotedCharacter value, null value, not $ null value)
+
+unionCharacterSets :: Maybe (S.Set Char) -> Maybe (S.Set Char) -> Maybe (S.Set Char)
+unionCharacterSets left right = S.union <$> left <*> right
+
+isSafeUnquotedCharacter :: Char -> Bool
+isSafeUnquotedCharacter = (`notElem` " \t\n*?[")
+
+summarizeBracketPattern :: String -> Maybe CasePatternSummary
+summarizeBracketPattern ('[':rest) = do
+    guard $ not (null rest) && last rest == ']'
+    let body = init rest
+    guard $ not (null body) && head body `notElem` "!^"
+    items <- bracketItems body
+    let chars = foldl unionCharacterSets (Just S.empty) $ map fst items
+    let safe = all snd items
+    return (chars, safe, False, True)
+  where
+    bracketItems [] = Just []
+    bracketItems ('[':':':xs) = do
+        (name, remaining) <- takeClassName [] xs
+        item <- bracketClass name
+        (item:) <$> bracketItems remaining
+    bracketItems ('[':marker:_) | marker `elem` ".=" = Nothing
+    bracketItems ('\\':value:xs) =
+        ((Just $ S.singleton value, isSafeUnquotedCharacter value):) <$> bracketItems xs
+    bracketItems [value] = do
+        return [(Just $ S.singleton value, isSafeUnquotedCharacter value)]
+    bracketItems (start:'-':end:xs)
+        | all isAscii [start, end] && start <= end = do
+            -- The parser normalizes an escaped '-' to the same AST spelling
+            -- as a range. Include '-' as well as the range so the inferred
+            -- alphabet safely covers both source forms.
+            let chars = S.insert '-' $ S.fromList [start..end]
+            ((Just chars, all isSafeUnquotedCharacter chars):) <$> bracketItems xs
+        | otherwise = Nothing
+    bracketItems (value:xs) =
+        ((Just $ S.singleton value, isSafeUnquotedCharacter value):) <$> bracketItems xs
+
+    takeClassName acc (':':']':xs) = Just (reverse acc, xs)
+    takeClassName acc (x:xs) = takeClassName (x:acc) xs
+    takeClassName _ [] = Nothing
+
+    bracketClass name =
+        case name of
+            "digit" -> known "0123456789"
+            "xdigit" -> known "0123456789abcdefABCDEF"
+            "alnum" -> unknownSafe
+            "alpha" -> unknownSafe
+            "lower" -> unknownSafe
+            "upper" -> unknownSafe
+            _ -> Nothing
+      where
+        known chars = Just (Just $ S.fromList chars, True)
+        unknownSafe = Just (Nothing, True)
+summarizeBracketPattern _ = Nothing
 
 
 -- Like & but well defined when the node already exists
