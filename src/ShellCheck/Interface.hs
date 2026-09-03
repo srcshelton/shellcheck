@@ -21,9 +21,9 @@
 module ShellCheck.Interface
     (
     SystemInterface(..)
-    , CheckSpec(csFilename, csScript, csCheckSourced, csIncludedWarnings, csExcludedWarnings, csShellTypeOverride, csMinSeverity, csIgnoreRC, csExtendedAnalysis, csOptionalChecks)
+    , CheckSpec(csFilename, csScript, csCheckSourced, csIncludedWarnings, csExcludedWarnings, csShellTypeOverride, csShVariant, csMinSeverity, csIgnoreRC, csExtendedAnalysis, csOptionalChecks)
     , CheckResult(crFilename, crComments)
-    , ParseSpec(psFilename, psScript, psCheckSourced, psIgnoreRC, psShellTypeOverride)
+    , ParseSpec(psFilename, psScript, psCheckSourced, psIgnoreRC, psShellTypeOverride, psShVariant)
     , ParseResult(prComments, prTokenPositions, prRoot, prUsedDisableDirectives)
     , AnalysisSpec(asScript, asShellType, asFallbackShell, asExecutionMode, asCheckSourced, asTokenPositions, asExtendedAnalysis, asOptionalChecks, asUsedDisableDirectives)
     , AnalysisResult(arComments)
@@ -99,6 +99,7 @@ data CheckSpec = CheckSpec {
     csExcludedWarnings :: [Integer],
     csIncludedWarnings :: Maybe [Integer],
     csShellTypeOverride :: Maybe Shell,
+    csShVariant :: Maybe Shell,
     csMinSeverity :: Severity,
     csExtendedAnalysis :: Maybe Bool,
     csOptionalChecks :: [String]
@@ -124,6 +125,7 @@ emptyCheckSpec = CheckSpec {
     csExcludedWarnings = [],
     csIncludedWarnings = Nothing,
     csShellTypeOverride = Nothing,
+    csShVariant = Nothing,
     csMinSeverity = StyleC,
     csExtendedAnalysis = Nothing,
     csOptionalChecks = []
@@ -135,7 +137,8 @@ newParseSpec = ParseSpec {
     psScript = "",
     psCheckSourced = False,
     psIgnoreRC = False,
-    psShellTypeOverride = Nothing
+    psShellTypeOverride = Nothing,
+    psShVariant = Nothing
 }
 
 newSystemInterface :: Monad m => SystemInterface m
@@ -152,7 +155,8 @@ data ParseSpec = ParseSpec {
     psScript :: String,
     psCheckSourced :: Bool,
     psIgnoreRC :: Bool,
-    psShellTypeOverride :: Maybe Shell
+    psShellTypeOverride :: Maybe Shell,
+    psShVariant :: Maybe Shell
 } deriving (Show, Eq)
 
 data ParseResult = ParseResult {

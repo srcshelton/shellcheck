@@ -1,5 +1,8 @@
 ## v0.11.0-irix - 2026-09-04
 ### Added
+- `--sh-variant` and the corresponding `sh-variant` configuration key can map
+  generic `sh` shebangs to the locally deployed shell without affecting
+  scripts with explicit dialect shebangs.
 - SC2337: Optional `check-unused-suppressions` suggestion for unnecessary
   `disable` directives.
 - SC2338: Optional `prefer-single-quotes` suggestion for constant strings.

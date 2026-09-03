@@ -123,6 +123,9 @@ options = [
     Option "s" ["shell"]
         (ReqArg (Flag "shell") "SHELLNAME")
         "Specify dialect (sh, bash, dash, ksh, busybox, irix-sh)",
+    Option "" ["sh-variant"]
+        (ReqArg (Flag "sh-variant") "SHELLNAME")
+        "Treat generic sh shebangs as this dialect",
     Option "S" ["severity"]
         (ReqArg (Flag "severity") "SEVERITY")
         "Minimum severity of errors to consider (error, warning, info, style)",
@@ -330,6 +333,15 @@ parseOption flag options =
                 return $ return options {
                             checkSpec = (checkSpec options) {
                                 csShellTypeOverride = Just shell
+                            }
+                        }
+
+        Flag "sh-variant" str ->
+            fromMaybe (die $ "Unknown shell: " ++ str) $ do
+                shell <- shellForExecutable str
+                return $ return options {
+                            checkSpec = (checkSpec options) {
+                                csShVariant = Just shell
                             }
                         }
 

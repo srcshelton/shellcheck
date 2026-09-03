@@ -329,7 +329,12 @@ determineShell fallbackShell t = fromMaybe Bash $
     getCandidate :: Token -> String
     getCandidate t@T_Script {} = fromShebang t
     getCandidate (T_Annotation _ annotations s) =
-        headOrDefault (fromShebang s) [s | ShellOverride s <- annotations]
+        headOrDefault (fromShebang s) $ do
+            annotation <- annotations
+            case annotation of
+                ShellOverride shell -> [shell]
+                ShVariantOverride shell -> [shell]
+                _ -> []
     fromShebang (T_Script _ (T_Literal _ s) _) = executableFromShebang s
 
 -- Given a root node, make a map from Id to parent Token.

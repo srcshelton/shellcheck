@@ -159,6 +159,8 @@ data Annotation =
     | EnableComment String
     | SourceOverride String
     | ShellOverride String
+    | ShVariant String
+    | ShVariantOverride String
     | SourcePath String
     | ExternalSources Bool
     | ExtendedAnalysis Bool

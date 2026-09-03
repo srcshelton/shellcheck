@@ -321,7 +321,11 @@ isIrixShell = do
     flagShell <- Mr.asks shellTypeOverride
     annotations <- getCurrentAnnotations False
     let annotatedShell = listToMaybe $ do
-            ShellOverride name <- annotations
+            annotation <- annotations
+            name <- case annotation of
+                ShellOverride value -> [value]
+                ShVariantOverride value -> [value]
+                _ -> []
             maybeToList $ shellForExecutable name
     return $ (flagShell `mplus` annotatedShell) == Just IrixSh
 
@@ -373,7 +377,8 @@ data Environment m = Environment {
     checkSourced :: Bool,
     ignoreRC :: Bool,
     currentFilename :: String,
-    shellTypeOverride :: Maybe Shell
+    shellTypeOverride :: Maybe Shell,
+    shVariantOverride :: Maybe Shell
 }
 
 parseProblem level code msg = do
@@ -1049,6 +1054,7 @@ prop_readAnnotation8 = isOk readAnnotation "# shellcheck disable=all\n"
 prop_readAnnotation9 = isOk readAnnotation "# shellcheck source='foo bar' source-path=\"baz etc\"\n"
 prop_readAnnotation10 = isOk readAnnotation "# shellcheck disable='SC1234,SC2345' enable=\"foo\" shell='bash'\n"
 prop_readAnnotation11 = isOk (readAnnotationWithoutPrefix False) "external-sources='true'"
+prop_readAnnotation12 = isOk (readAnnotationWithoutPrefix False) "sh-variant='busybox'"
 
 readAnnotation = called "shellcheck directive" $ do
     try readAnnotationPrefix
@@ -1121,6 +1127,14 @@ readAnnotationWithoutPrefix sandboxed = do
                     parseNoteAt pos ErrorC 1103
                         "This shell type is unknown. Use e.g. sh or bash."
                 return [ShellOverride shell]
+
+            "sh-variant" -> do
+                pos <- getPosition
+                shell <- quoted (many1 anyChar) <|> (many1 $ noneOf " \n")
+                when (isNothing $ shellForExecutable shell) $
+                    parseNoteAt pos ErrorC 1103
+                        "This shell type is unknown. Use e.g. sh or bash."
+                return [ShVariant shell]
 
             "extended-analysis" -> do
                 pos <- getPosition
@@ -3473,16 +3487,30 @@ readScriptFile sourced = do
         annotationStart <- startSpan
         fileAnnotations <- readAnnotations
 
+        let explicitAnnotations = fileAnnotations ++ rcAnnotations
+        let shellAnnotationSpecified =
+                any (\x -> case x of ShellOverride {} -> True; _ -> False) explicitAnnotations
+        shellFlagSpecified <- isJust <$> Mr.asks shellTypeOverride
+        shVariantFlag <- Mr.asks shVariantOverride
+        let configuredShVariant =
+                (shellName <$> shVariantFlag) `mplus`
+                    listToMaybe [name | ShVariant name <- explicitAnnotations]
+        let shVariant = do
+                guard $ not shellAnnotationSpecified && not shellFlagSpecified
+                guard $ shellForExecutable (executableFromShebang shebangString) == Just Sh
+                name <- configuredShVariant
+                guard $ isJust $ shellForExecutable name
+                return name
+        let effectiveFileAnnotations =
+                map ShVariantOverride (maybeToList shVariant) ++ fileAnnotations
+
         -- Similarly put the filewide annotations on the stack to allow earlier suppression
-        withAnnotations fileAnnotations $ do
+        withAnnotations effectiveFileAnnotations $ do
             when (hasBom) $
                 parseProblemAt pos ErrorC 1082
                     "This file has a UTF-8 BOM. Remove it with: LC_CTYPE=C sed '1s/^...//' < yourscript ."
-            let annotations = fileAnnotations ++ rcAnnotations
+            let annotations = effectiveFileAnnotations ++ rcAnnotations
             annotationId <- endSpan annotationStart
-            let shellAnnotationSpecified =
-                    any (\x -> case x of ShellOverride {} -> True; _ -> False) annotations
-            shellFlagSpecified <- isJust <$> Mr.asks shellTypeOverride
             let ignoreShebang = shellAnnotationSpecified || shellFlagSpecified
 
             unless ignoreShebang $
@@ -3582,7 +3610,8 @@ testEnvironment =
         checkSourced = False,
         currentFilename = "myscript",
         ignoreRC = False,
-        shellTypeOverride = Nothing
+        shellTypeOverride = Nothing,
+        shVariantOverride = Nothing
     }
 
 
@@ -3762,7 +3791,8 @@ parseScript sys spec =
         checkSourced = psCheckSourced spec,
         currentFilename = psFilename spec,
         ignoreRC = psIgnoreRC spec,
-        shellTypeOverride = psShellTypeOverride spec
+        shellTypeOverride = psShellTypeOverride spec,
+        shVariantOverride = psShVariant spec
     }
 
 -- Same as 'try' but emit syntax errors if the parse fails.

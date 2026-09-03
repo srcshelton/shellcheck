@@ -12,3 +12,4 @@
 | [#3447](https://github.com/koalaman/shellcheck/issues/3447) | `Avoid malformed SC2292 fixes (#3447)` |
 | [#26](https://github.com/koalaman/shellcheck/issues/26) | `Clarify ineffective subshell loop control (#26)` |
 | [#3522](https://github.com/koalaman/shellcheck/issues/3522) | `Detect status clobbered by command substitutions (#3522)` |
+| [#2921](https://github.com/koalaman/shellcheck/issues/2921) | `Allow remapping generic sh shebangs (#2921)` |

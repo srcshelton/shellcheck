@@ -98,10 +98,17 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
 **-s**\ *shell*,\ **--shell=***shell*
 
 :   Specify Bourne shell dialect. Valid values are *sh*, *bash*, *dash*, *ksh*,
-    and *busybox*.
+    *busybox*, and *irix-sh*.
     The default is to deduce the shell from the file's `shell` directive,
     shebang, or `.bash/.bats/.dash/.ksh` extension, in that order. *sh* refers to
     POSIX `sh` (not the system's), and will warn of portability issues.
+
+**--sh-variant=***shell*
+
+:   Treat a generic `sh` shebang as the specified dialect. This affects scripts
+    using interpreters such as `/bin/sh`, while explicit `bash`, `dash`, `ksh`,
+    `busybox`, and `irix-sh` shebangs retain their own dialect. An explicit
+    `shell` override takes precedence.
 
 **-S**\ *SEVERITY*,\ **--severity=***severity*
 
@@ -276,6 +283,10 @@ Valid keys are:
     This option defaults to `false` only due to ShellCheck's origin as a
     remote service for checking untrusted scripts. It can safely be enabled
     for normal development.
+
+**sh-variant**
+:   Set the dialect used for generic `sh` shebangs. It has the same semantics
+    as **--sh-variant**, and can be set in `.shellcheckrc` or a file directive.
 
 **source**
 :   Overrides the filename included by a `source`/`.` statement. This can be

@@ -173,6 +173,16 @@ shellForExecutable name =
         "irix-sh" -> return IrixSh
         _ -> Nothing
 
+shellName :: Shell -> String
+shellName shell =
+    case shell of
+        Sh -> "sh"
+        Bash -> "bash"
+        Dash -> "dash"
+        Ksh -> "ksh"
+        BusyboxSh -> "busybox"
+        IrixSh -> "irix-sh"
+
 flagsForRead = "sreu:n:N:i:p:a:t:"
 
 -- IRIX sh uses -p to read from the coprocess, without an option argument.

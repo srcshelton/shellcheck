@@ -76,7 +76,8 @@ checkScript sys spec = do
             psScript = contents,
             psCheckSourced = csCheckSourced spec,
             psIgnoreRC = csIgnoreRC spec,
-            psShellTypeOverride = csShellTypeOverride spec
+            psShellTypeOverride = csShellTypeOverride spec,
+            psShVariant = csShVariant spec
         }
         let parseMessages = prComments result
         let tokenPositions = prTokenPositions result
@@ -251,6 +252,32 @@ prop_irixWorkaroundsBecomeUnused =
     [2337, 2337] == result
   where
     result = check "# shellcheck shell=irix-sh enable=check-unused-suppressions\n# shellcheck disable=SC1072,SC1073\ncase \"$1\" {\nvalue) true;;\n}"
+
+checkShVariant variant src =
+    getErrors
+        (mockedSystemInterface [])
+        emptyCheckSpec {
+            csScript = src,
+            csExcludedWarnings = [2148],
+            csShVariant = Just variant
+        }
+
+prop_shVariantRemapsGenericShParser =
+    null $ intersect [1072, 1073] $
+        checkShVariant IrixSh "#!/bin/sh\ncase value {\nvalue) echo yes;;\n}"
+prop_shVariantRemapsGenericShAnalyzer =
+    3068 `elem` checkShVariant IrixSh "#!/bin/sh\nvalue=$(echo hi)"
+prop_shVariantDoesNotRemapExplicitBash =
+    3068 `notElem` checkShVariant IrixSh "#!/bin/bash\nvalue=$(echo hi)"
+prop_shellDirectiveOverridesShVariant =
+    3068 `notElem` checkShVariant IrixSh
+        "#!/bin/sh\n# shellcheck shell=bash\nvalue=$(echo hi)"
+prop_rcCanSetShVariant =
+    3068 `elem` checkWithRc "sh-variant=irix-sh" emptyCheckSpec {
+        csScript = "#!/bin/sh\nvalue=$(echo hi)"
+    }
+prop_shVariantPreservesShebangChecks =
+    2239 `elem` checkShVariant IrixSh "#!sh\ntrue"
 
 prop_optionDisablesIssue1 =
     null $ getErrors
