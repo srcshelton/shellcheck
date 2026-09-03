@@ -16,6 +16,8 @@
   fail when `set -u` is active.
 - SC2345: Optional `check-exit-in-subshell` warning for `exit` and `return`
   inside implicit pipeline subshells.
+- SC2346: Optional `require-final-case-terminator` suggestion for ending the
+  final branch of a `case` statement with `;;`.
 - SC3068: IRIX sh does not perform command substitution for `$(..)`, even
   though it accepts the text syntactically; use legacy backticks.
 

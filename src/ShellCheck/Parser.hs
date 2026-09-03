@@ -2872,7 +2872,7 @@ readExplicitCaseSeparator = choice [
 
 readCaseSeparator end = choice [
     readExplicitCaseSeparator,
-    lookAhead (readLineBreak >> end) >> return CaseBreak
+    lookAhead (readLineBreak >> end) >> return CaseBreakImplicit
     ]
 
 prop_readFunctionDefinition = isOk readFunctionDefinition "foo() { command foo --lol \"$@\"; }"

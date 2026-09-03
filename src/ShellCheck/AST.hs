@@ -35,7 +35,12 @@ data Piped = Piped | Unpiped deriving (Show, Eq)
 data AssignmentMode = Assign | Append deriving (Show, Eq)
 newtype FunctionKeyword = FunctionKeyword Bool deriving (Show, Eq)
 newtype FunctionParentheses = FunctionParentheses Bool deriving (Show, Eq)
-data CaseType = CaseBreak | CaseFallThrough | CaseContinue deriving (Show, Eq)
+data CaseType =
+    CaseBreak
+    | CaseBreakImplicit
+    | CaseFallThrough
+    | CaseContinue
+    deriving (Show, Eq)
 
 newtype Root = Root Token
 data Token = OuterToken Id (InnerToken Token) deriving (Show)

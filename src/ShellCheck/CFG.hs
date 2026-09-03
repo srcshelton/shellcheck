@@ -674,6 +674,7 @@ build t = do
                 -- After body
                 case typ of
                     CaseBreak -> linkRange body end
+                    CaseBreakImplicit -> linkRange body end
                     CaseFallThrough -> linkRange body nextBody
                     CaseContinue -> linkRange body nextCond
 

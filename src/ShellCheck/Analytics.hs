@@ -284,6 +284,13 @@ optionalTreeChecks = [
     }, nodeChecksToTreeCheck [checkExitInSubshell])
 
     ,(newCheckDescription {
+        cdName = "require-final-case-terminator",
+        cdDescription = "Suggest ending the final case branch with ;;",
+        cdPositive = "case $var in value) echo yes; esac",
+        cdNegative = "case $var in value) echo yes;; esac"
+    }, nodeChecksToTreeCheck [checkFinalCaseTerminator])
+
+    ,(newCheckDescription {
         cdName = "avoid-nullary-conditions",
         cdDescription = "Suggest explicitly using -n in `[ $var ]`",
         cdPositive = "[ \"$var\" ]",
@@ -2569,6 +2576,19 @@ checkExitInSubshell params command@T_SimpleCommand {}
         "This exit only terminates an implicit pipeline subshell; the parent shell continues."
 checkExitInSubshell _ _ = return ()
 
+
+prop_checkFinalCaseTerminator1 = verify checkFinalCaseTerminator "case $var in value) echo yes; esac"
+prop_checkFinalCaseTerminator2 = verifyNot checkFinalCaseTerminator "case $var in value) echo yes;; esac"
+prop_checkFinalCaseTerminator3 = verifyNot checkFinalCaseTerminator "case $var in value) echo yes;& esac"
+prop_checkFinalCaseTerminator4 = verifyNot checkFinalCaseTerminator "case $var in value) echo yes;;& esac"
+prop_checkFinalCaseTerminator5 = verify checkFinalCaseTerminator "case $var in value) esac"
+checkFinalCaseTerminator _ (T_CaseExpression id _ cases) =
+    case reverse cases of
+        (CaseBreakImplicit, _, _):_ ->
+            style id 2346 "Prefer terminating the final case branch with ';;'."
+        _ -> return ()
+checkFinalCaseTerminator _ _ = return ()
+
 prop_checkQuotesInLiterals1 = verifyTree checkQuotesInLiterals "param='--foo=\"bar\"'; app $param"
 prop_checkQuotesInLiterals1a = verifyTree checkQuotesInLiterals "param=\"--foo='lolbar'\"; app $param"
 prop_checkQuotesInLiterals2 = verifyNotTree checkQuotesInLiterals "param='--foo=\"bar\"'; app \"$param\""
@@ -3880,7 +3900,7 @@ checkUnmatchableCases params t =
             -- Check all patterns for whether they can ever match
             let allpatterns  = concatMap snd3 list
             -- Check only the non-fallthrough branches for shadowing
-            let breakpatterns = concatMap snd3 $ filter (\x -> fst3 x == CaseBreak) list
+            let breakpatterns = concatMap snd3 $ filter (isBreaking . fst3) list
 
             if isConstant word
                 then warn (getId word) 2194
@@ -3897,6 +3917,9 @@ checkUnmatchableCases params t =
   where
     fst3 (x,_,_) = x
     snd3 (_,x,_) = x
+    isBreaking CaseBreak = True
+    isBreaking CaseBreakImplicit = True
+    isBreaking _ = False
     tp = tokenPositions params
     check target candidate = unless (pseudoGlobsCanOverlap target $ wordToPseudoGlob candidate) $
         warn (getId candidate) 2195
