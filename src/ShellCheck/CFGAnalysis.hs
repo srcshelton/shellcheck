@@ -1285,7 +1285,7 @@ transferEffect ctx effect =
         CFHintDefined name -> return ()
 --        _ -> error $ "Unknown effect " ++ show effect
   where
-    valueMayBeEmpty (CFValueCasePattern _ canBeEmpty _) _ = canBeEmpty
+    valueMayBeEmpty (CFValueCasePattern _ _ canBeEmpty _) _ = canBeEmpty
     valueMayBeEmpty _ value = literalValue value == Just ""
 
 
@@ -1295,13 +1295,13 @@ cfValueToVariableValue ctx val =
         CFValueArray -> return unknownVariableValue -- TODO: Track array status
         CFValueComputed _ parts -> foldM f emptyVariableValue parts
         CFValueInteger -> return unknownIntegerValue
-        CFValueCasePattern chars canBeEmpty canBeNonEmpty ->
+        CFValueCasePattern chars safe canBeEmpty canBeNonEmpty ->
             return unknownVariableValue {
                 possibleCharacters = chars,
                 spaceStatus = case (canBeEmpty, canBeNonEmpty) of
                     (True, False) -> SpaceStatusEmpty
                     (True, True) -> SpaceStatusDirty
-                    (False, True) -> SpaceStatusClean
+                    (False, True) -> if safe then SpaceStatusClean else SpaceStatusDirty
                     (False, False) -> SpaceStatusEmpty
             }
         CFValueString -> return unknownVariableValue

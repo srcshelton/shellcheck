@@ -2344,6 +2344,17 @@ prop_checkSpacefulnessCfg114 = verify checkSpacefulnessCfg "IFS=5; case \"$value
 prop_checkSpacefulnessCfg115 = verifyNot checkSpacefulnessCfg "IFS=:; case \"$value\" in [0-9]) echo $value;; esac"
 prop_checkSpacefulnessCfg116 = verify checkSpacefulnessCfg "IFS=-; case \"$value\" in [a\\-z]) echo $value;; esac"
 prop_checkSpacefulnessCfg117 = verify checkSpacefulnessCfg "case \"$value\" in foo|'') echo $value;; esac"
+prop_checkSpacefulnessCfg118 = verifyNot checkSpacefulnessCfg "case \"$value\" in ''|*[!0-9]*) :;; *) echo $value;; esac"
+prop_checkSpacefulnessCfg119 = verify checkSpacefulnessCfg "case \"$value\" in *[!0-9]*) :;; *) echo $value;; esac"
+prop_checkSpacefulnessCfg120 = verifyNot checkSpacefulnessCfg "case \"$value\" in '') :;; *[!0-9]*) :;; *) echo $value;; esac"
+prop_checkSpacefulnessCfg121 = verify checkSpacefulnessCfg "IFS=5; case \"$value\" in ''|*[!0-9]*) :;; *) echo $value;; esac"
+prop_checkSpacefulnessCfg122 = verifyNot checkSpacefulnessCfg "IFS=:; case \"$value\" in ''|*[!0-9]*) :;; *) echo $value;; esac"
+prop_checkSpacefulnessCfg123 = verifyNot checkSpacefulnessCfg "case \"$value\" in ''|*[![:digit:]]*) :;; *) echo $value;; esac"
+prop_checkSpacefulnessCfg124 = verifyNot checkSpacefulnessCfg "case \"$value\" in ''|*[!0123456789]*) :;; *) echo $value;; esac"
+prop_checkSpacefulnessCfg125 = verify checkSpacefulnessCfg "case \"$value\" in ''|*[![:alnum:]_-]*) :;; *) echo $value;; esac"
+prop_checkSpacefulnessCfg126 = verify checkSpacefulnessCfg "case \"$value\" in ''|*[!0-9]*) ;& *) echo $value;; esac"
+prop_checkSpacefulnessCfg127 = verify checkSpacefulnessCfg "case \"$value\" in ''|*[!0-9]*) ;;& *) echo $value;; esac"
+prop_checkSpacefulnessCfg128 = verify checkSpacefulnessCfg "case \"$value\" in ''|*[!0-9]*) :;; *) value='has space'; echo $value;; esac"
 
 checkSpacefulnessCfg = checkSpacefulnessCfg' True
 checkVerboseSpacefulnessCfg = checkSpacefulnessCfg' False
@@ -2602,6 +2613,8 @@ prop_checkUnboundVariables17 = verify checkUnboundVariables "set -u; declare var
 prop_checkUnboundVariables18 = verifyNot checkUnboundVariables "case \"$var\" in value) set -u; echo \"$var\";; esac"
 prop_checkUnboundVariables19 = verify checkUnboundVariables "case \"$var\" in '') set -u; echo \"$var\";; esac"
 prop_checkUnboundVariables20 = verifyNot checkUnboundVariables "case \"$var\" in [0-9]) set -u; echo \"$var\";; esac"
+prop_checkUnboundVariables21 = verifyNot checkUnboundVariables "case \"$var\" in ''|*[!0-9]*) :;; *) set -u; echo \"$var\";; esac"
+prop_checkUnboundVariables22 = verify checkUnboundVariables "case \"$var\" in *[!0-9]*) :;; *) set -u; echo \"$var\";; esac"
 checkUnboundVariables params token =
     case reference of
         Just name
