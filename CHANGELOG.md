@@ -20,6 +20,7 @@
 ### Fixed
 - SC2038 now recommends NUL delimiters end-to-end instead of suggesting
   `find -exec`, whose invoked command may still emit newline-delimited names.
+- SC2227 is now limited to redirections lexically inside `find` command actions.
 
 ### Removed
 - SC3003: removed since ANSI C string is specified in POSIX.1-2024

@@ -1183,19 +1183,46 @@ checkLnArguments = CommandCheck (Basename "ln") $ missingDestination f
 prop_checkFindRedirections1 = verify    checkFindRedirections "find . -exec echo {} > file \\;"
 prop_checkFindRedirections2 = verifyNot checkFindRedirections "find . -exec echo {} \\; > file"
 prop_checkFindRedirections3 = verifyNot checkFindRedirections "find . -execdir sh -c 'foo > file' \\;"
+prop_checkFindRedirections4 = verifyNot checkFindRedirections "find \"$log\" 2>/dev/null -mindepth 4 -name build.log -print"
+prop_checkFindRedirections5 = verify    checkFindRedirections "find . -exec echo {} 2>/dev/null +"
+prop_checkFindRedirections6 = verify    checkFindRedirections "find . -execdir echo {} > file \\;"
+prop_checkFindRedirections7 = verify    checkFindRedirections "find . -ok echo {} > file \\;"
+prop_checkFindRedirections8 = verifyNot checkFindRedirections "find . 2>/dev/null -exec echo {} \\;"
 checkFindRedirections = CommandCheck (Basename "find") f
   where
     f t = do
         redirecting <- getClosestCommandM t
         case redirecting of
             Just (T_Redirecting _ redirs@(_:_) (T_SimpleCommand _ _ args@(_:_:_))) -> do
-                -- This assumes IDs are sequential, which is mostly but not always true.
-                let minRedir = minimum $ map getId redirs
-                let maxArg   = maximum $ map getId args
-                when (minRedir < maxArg) $
-                    warn minRedir 2227
+                positions <- asks tokenPositions
+                forM_ (filter (insideAnyAction positions args) redirs) $ \redir ->
+                    warn (getId redir) 2227
                         "Redirection applies to the find command itself. Rewrite to work per action (or move to end)."
             _ -> return ()
+
+    insideAnyAction positions args redir =
+        any (inside positions redir) $ findActionRanges args
+
+    inside positions redir (action, terminator) = fromMaybe False $ do
+        actionStart <- startPosition positions action
+        redirStart <- startPosition positions redir
+        terminatorStart <- startPosition positions terminator
+        return $ actionStart < redirStart && redirStart < terminatorStart
+
+    startPosition positions token = fst <$> M.lookup (getId token) positions
+
+    findActionRanges [] = []
+    findActionRanges (arg:rest)
+        | isAction arg =
+            case break isTerminator rest of
+                (_, []) -> []
+                (_, terminator:remaining) ->
+                    (arg, terminator) : findActionRanges remaining
+        | otherwise = findActionRanges rest
+
+    isAction token =
+        getLiteralString token `elem` map Just ["-exec", "-execdir", "-ok", "-okdir"]
+    isTerminator token = getLiteralString token `elem` map Just [";", "+"]
 
 prop_checkWhich = verify checkWhich "which '.+'"
 checkWhich = CommandCheck (Basename "which") $
