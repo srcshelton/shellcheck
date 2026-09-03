@@ -157,9 +157,11 @@ internalToExternal s =
         case literalValue $ variableValue state of
             Just value -> maybe (not $ null value) (any (`elem` value)) possibleIFS
             Nothing ->
-                case possibleIFS of
-                    Nothing -> spaceStatus (variableValue state) /= SpaceStatusEmpty
-                    Just chars
+                case (possibleIFS, possibleCharacters $ variableValue state) of
+                    (Nothing, Just chars) -> not $ S.null chars
+                    (Just separators, Just chars) -> any (`S.member` chars) separators
+                    (Nothing, Nothing) -> spaceStatus (variableValue state) /= SpaceStatusEmpty
+                    (Just chars, Nothing)
                         | isInteger state -> any (`elem` "-0123456789") chars
                         | spaceStatus (variableValue state) == SpaceStatusClean ->
                             any (`notElem` " \t\n*?[") chars
@@ -251,6 +253,7 @@ createEnvironmentState = do
     spacelessVariableState = unknownVariableState {
         variableValue = VariableValue {
             literalValue = Nothing,
+            possibleCharacters = Nothing,
             spaceStatus = SpaceStatusClean,
             numericalStatus = NumericalStatusUnknown
         }
@@ -359,6 +362,10 @@ unknownFunctionValue = S.singleton FunctionUnknown
 -- The information about the value of a single variable
 data VariableValue = VariableValue {
     literalValue :: Maybe String, -- TODO: For debugging. Remove me.
+    -- A conservative character alphabet retained when branches merge values.
+    -- This lets custom IFS analysis stay precise without inventing one literal
+    -- to stand for several alternatives.
+    possibleCharacters :: Maybe (S.Set Char),
     spaceStatus :: SpaceStatus,
     numericalStatus :: NumericalStatus
 }
@@ -390,6 +397,7 @@ unknownVariableState = VariableState {
 
 unknownVariableValue = VariableValue {
     literalValue = Nothing,
+    possibleCharacters = Nothing,
     spaceStatus = SpaceStatusDirty,
     numericalStatus = NumericalStatusUnknown
 }
@@ -415,6 +423,7 @@ mergeVariableState a b = VariableState {
 
 mergeVariableValue a b = VariableValue {
     literalValue = if literalValue a == literalValue b then literalValue a else Nothing,
+    possibleCharacters = S.union <$> possibleCharacters a <*> possibleCharacters b,
     spaceStatus = mergeSpaceStatus (spaceStatus a) (spaceStatus b),
     numericalStatus = mergeNumericalStatus (numericalStatus a) (numericalStatus b)
 }
@@ -1190,6 +1199,17 @@ transferEffect ctx effect =
         CFWriteVariable name value -> do
             val <- cfValueToVariableValue ctx value
             updateVariableValue ctx name val
+        CFConstrainVariable name values -> do
+            let constrained = foldl1 mergeVariableValue $ map literalToVariableValue values
+            if not (null name) && all isDigit name && any isFunctionCall (cStack ctx)
+                then do
+                    props <- readVariableProperties ctx name
+                    writeLocal ctx name VariableState {
+                        variableValue = constrained,
+                        variableProperties = props,
+                        variableMayBeUnsetState = False
+                    }
+                else updateVariableValue ctx name constrained
         CFWriteGlobal name value -> do
             val <- cfValueToVariableValue ctx value
             updateGlobalValue ctx name val
@@ -1290,6 +1310,7 @@ appendVariableValue :: VariableValue -> VariableValue -> VariableValue
 appendVariableValue a b =
     unknownVariableValue {
         literalValue = liftM2 (++) (literalValue a) (literalValue b),
+        possibleCharacters = S.union <$> possibleCharacters a <*> possibleCharacters b,
         spaceStatus = appendSpaceStatus (spaceStatus a) (spaceStatus b),
         numericalStatus = appendNumericalStatus (numericalStatus a) (numericalStatus b)
     }
@@ -1312,12 +1333,14 @@ appendNumericalStatus a b =
 
 unknownIntegerValue = unknownVariableValue {
     literalValue = Nothing,
+    possibleCharacters = Just $ S.fromList "-0123456789",
     spaceStatus = SpaceStatusClean,
     numericalStatus = NumericalStatusDefinitely
 }
 
 literalToVariableValue str = unknownVariableValue {
     literalValue = Just str,
+    possibleCharacters = Just $ S.fromList str,
     spaceStatus = literalToSpaceStatus str,
     numericalStatus = literalToNumericalStatus str
 }

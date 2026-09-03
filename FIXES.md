@@ -15,3 +15,4 @@
 | [#2921](https://github.com/koalaman/shellcheck/issues/2921) | `Allow remapping generic sh shebangs (#2921)` |
 | [#3166](https://github.com/koalaman/shellcheck/issues/3166) | `Recognize POSIX.1-2024 case fallthrough (#3166)` |
 | [#1095](https://github.com/koalaman/shellcheck/issues/1095) | `Parse variable references in trap actions (#1095)` |
+| [#1189](https://github.com/koalaman/shellcheck/issues/1189) | `Constrain case values from exact patterns (#1189)` |

@@ -48,6 +48,8 @@ import ShellCheck.Regex
 import Control.DeepSeq
 import Control.Monad
 import Control.Monad.Identity
+import Control.Monad.Writer (Writer, execWriter)
+import Data.Char (isDigit)
 import Data.Array.Unboxed
 import Data.Array.ST
 import Data.List hiding (map)
@@ -116,6 +118,8 @@ data CFEffect =
     | CFUnsetProps (Maybe Scope) String (S.Set CFVariableProp)
     | CFReadVariable String
     | CFWriteVariable String CFValue
+    -- Restrict a variable to the exact values which matched a case arm.
+    | CFConstrainVariable String [String]
     | CFWriteGlobal String CFValue
     | CFWriteLocal String CFValue
     | CFWritePrefix String CFValue
@@ -191,7 +195,7 @@ data CFGResult = CFGResult {
 buildGraph :: CFGParameters -> Token -> CFGResult
 buildGraph params root =
     let
-        (nextNode, base) = execRWS (buildRoot root) (newCFContext params) 0
+        (nextNode, base) = execRWS (buildRoot root) (newCFContext params root) 0
         (nodes, edges, mapping, association) =
 --            renumberTopologically $
                 removeUnnecessaryStructuralNodes
@@ -355,17 +359,26 @@ data CFContext = CFContext {
     cfTokenStack :: [Id],
     cfExitTarget :: Maybe Node,
     cfReturnTarget :: Maybe Node,
+    cfPositionalParameters :: S.Set String,
     cfParameters :: CFGParameters
 }
-newCFContext params = CFContext {
+newCFContext params root = CFContext {
     cfIsCondition = False,
     cfIsFunction = False,
     cfLoopStack = [],
     cfTokenStack = [],
     cfExitTarget = Nothing,
     cfReturnTarget = Nothing,
+    cfPositionalParameters = positionalParameters root,
     cfParameters = params
 }
+  where
+    positionalParameters token = S.fromList $ execWriter $ doAnalysis collect token
+    collect :: Token -> Writer [String] ()
+    collect (T_DollarBraced _ _ parts) = do
+        let name = getBracedReference $ concat $ oversimplify parts
+        when (not (null name) && all isDigit name) $ tell [name]
+    collect _ = return ()
 
 -- The monad we generate a graph in
 type CFM a = RWS CFContext CFW Int a
@@ -664,9 +677,19 @@ build t = do
 
             buildBranch (typ, cond, body) = do
                 c <- buildCond cond
+                constraint <- case caseVariable of
+                    Just name
+                        | Just values <- mapM getLiteralString cond ->
+                            newNodeRange $ applySingle $ IdTagged id $
+                                CFConstrainVariable name values
+                    _ -> none
                 b <- sequentially body
-                linkRange c b
+                linkRanges [c, constraint, b]
                 return (typ, c, b)
+
+            caseVariable = do
+                [part] <- return $ getWordParts t
+                getUnmodifiedParameterExpansion part
 
             linkBranch end (typ, cond, body) (_, nextCond, nextBody) = do
                 -- Failure case
@@ -969,6 +992,7 @@ handleCommand cmd vars args literalCmd = do
         Just "return" -> regularExpansion vars (NE.toList args) $ handleReturn
         Just "unset" -> regularExpansionWithStatus vars args $ handleUnset args
         Just "set" -> regularExpansionWithStatus vars args $ handleSet args
+        Just "shift" -> regularExpansionWithStatus vars args $ invalidatePositionals $ getId cmd
 
         Just "declare" -> handleDeclare args
         Just "local" -> handleDeclare args
@@ -1041,10 +1065,37 @@ handleCommand cmd vars args literalCmd = do
         -- Apply a constructor like CFUndefineVariable to each literalName, and tag with its id
         unsetWith c = newNodeRange $ CFApplyEffects $ map (\(token, name) -> IdTagged (getId token) $ c name) literalNames
 
-    handleSet (cmd NE.:| args) =
-        newNodeRange $ CFApplyEffects $ maybeToList $ do
-            enabled <- nounsetSetting $ mapMaybe getLiteralString args
-            return $ IdTagged (getId cmd) $ CFSetNounset enabled
+    handleSet (cmd NE.:| args) = do
+        positionalEffects <-
+            if setsPositionals args
+            then positionalWrites $ getId cmd
+            else return []
+        let optionEffects = maybeToList $ do
+                enabled <- nounsetSetting $ mapMaybe getLiteralString args
+                return $ IdTagged (getId cmd) $ CFSetNounset enabled
+        newNodeRange $ CFApplyEffects $ optionEffects ++ positionalEffects
+
+    invalidatePositionals :: Id -> CFM Range
+    invalidatePositionals id = do
+        effects <- positionalWrites id
+        newNodeRange $ CFApplyEffects effects
+
+    positionalWrites :: Id -> CFM [IdTagged CFEffect]
+    positionalWrites id = do
+        names <- asks cfPositionalParameters
+        return [IdTagged id $ CFWriteVariable name CFValueString | name <- S.toList names]
+
+    setsPositionals :: [Token] -> Bool
+    setsPositionals = go . map getLiteralString
+      where
+        go [] = False
+        go (Just option:_:rest) | option `elem` ["-o", "+o"] = go rest
+        go [Just option] | option `elem` ["-o", "+o"] = False
+        go (Just "--":_) = True
+        go (Just value:rest)
+            | "-" `isPrefixOf` value || "+" `isPrefixOf` value = go rest
+            | otherwise = True
+        go (Nothing:_) = True
 
     nounsetSetting = go Nothing
       where
