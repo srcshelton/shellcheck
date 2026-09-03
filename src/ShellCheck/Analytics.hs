@@ -201,6 +201,7 @@ nodeChecks = [
     ,checkBatsTestDoesNotUseNegation
     ,checkCommandIsUnreachable
     ,checkSpacefulnessCfg
+    ,checkStatusAfterCommandSubstitution
     ,checkOverwrittenExitCode
     ,checkUnnecessaryArithmeticExpansionIndex
     ,checkUnnecessaryParens
@@ -5525,6 +5526,37 @@ checkOverwrittenExitCode params t =
             Just "echo" -> True
             Just "printf" -> True
             _ -> False
+
+
+prop_checkStatusAfterCommandSubstitution1 = verify checkStatusAfterCommandSubstitution "#!/bin/bash\nfalse; echo \"$(true)\" \"$?\""
+prop_checkStatusAfterCommandSubstitution2 = verify checkStatusAfterCommandSubstitution "#!/bin/bash\nfalse; echo \"$(true):$?\""
+prop_checkStatusAfterCommandSubstitution3 = verify checkStatusAfterCommandSubstitution "#!/bin/ksh\nfalse; echo `true` $?"
+prop_checkStatusAfterCommandSubstitution4 = verifyNot checkStatusAfterCommandSubstitution "#!/bin/bash\nfalse; echo \"$?\" \"$(true)\""
+prop_checkStatusAfterCommandSubstitution5 = verifyNot checkStatusAfterCommandSubstitution "#!/bin/dash\nfalse; echo \"$(true)\" \"$?\""
+prop_checkStatusAfterCommandSubstitution6 = verifyNot checkStatusAfterCommandSubstitution "#!/bin/bash\nfalse; echo \"$(printf '%s' \"$?\")\""
+prop_checkStatusAfterCommandSubstitution7 = verifyNot checkStatusAfterCommandSubstitution "#!/bin/bash\nfalse; status=$?; echo \"$(true)\" \"$status\""
+checkStatusAfterCommandSubstitution params (T_SimpleCommand _ _ words@(_:_)) =
+    when (shellType params `elem` [Bash, Ksh]) $ checkEvents False $ concatMap events words
+  where
+    checkEvents _ [] = return ()
+    checkEvents _ (Left _:rest) = checkEvents True rest
+    checkEvents False (Right _:rest) = checkEvents False rest
+    checkEvents True (Right id:rest) = do
+        warn id 2347 $
+            "This $? is overwritten by an earlier command substitution in the same command. " ++
+                "Save the status in a variable first."
+        checkEvents True rest
+
+    -- A command substitution starts a new expansion scope. Record it for this
+    -- command, but let the nested T_SimpleCommand check its own uses of $?.
+    events t =
+        case t of
+            T_DollarExpansion id _ -> [Left id]
+            T_Backticked id _ -> [Left id]
+            T_DollarBraceCommandExpansion id _ _ -> [Left id]
+            T_DollarBraced id _ value | getLiteralString value == Just "?" -> [Right id]
+            OuterToken _ inner -> concatMap events $ foldr (:) [] inner
+checkStatusAfterCommandSubstitution _ _ = return ()
 
 
 prop_checkUnnecessaryArithmeticExpansionIndex1 = verify checkUnnecessaryArithmeticExpansionIndex "a[$((1+1))]=n"

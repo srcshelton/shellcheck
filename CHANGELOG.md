@@ -18,6 +18,8 @@
   inside implicit pipeline subshells.
 - SC2346: Optional `require-final-case-terminator` suggestion for ending the
   final branch of a `case` statement with `;;`.
+- SC2347: Warn when a command substitution overwrites `$?` before it is
+  expanded later in the same Bash or Ksh command.
 - SC3068: IRIX sh does not perform command substitution for `$(..)`, even
   though it accepts the text syntactically; use legacy backticks.
 
