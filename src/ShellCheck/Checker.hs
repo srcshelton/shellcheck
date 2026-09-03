@@ -154,6 +154,25 @@ checkOptionIncludes includes src =
         csCheckSourced = True
     }
 
+checkWithOption option src =
+    checkWithSpec [] emptyCheckSpec {
+        csScript = src,
+        csExcludedWarnings = [2148],
+        csOptionalChecks = [option]
+    }
+
+-- Exercise optional checks through the same parse/analyze/filter path used by
+-- callers. The module-local example tests verify each implementation directly;
+-- this additionally catches missing registration and accidental default enablement.
+prop_optionalExamplesWorkThroughChecker = all checkOptional optionalChecks
+  where
+    checkOptional description =
+        let name = cdName description
+            positive = cdPositive description
+            negative = cdNegative description
+        in length (checkWithOption name positive) > length (check positive)
+            && checkWithOption name negative == check negative
+
 checkWithRc rc = getErrors
     (mockRcFile rc $ mockedSystemInterface [])
 
