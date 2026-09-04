@@ -1697,10 +1697,10 @@ ensureDollar =
 
 readNormalDollar = do
     ensureDollar
-    readDollarExp <|> readDollarDoubleQuote <|> readDollarSingleQuote <|> readDollarLonely False
+    readDollarExp False <|> readDollarDoubleQuote <|> readDollarSingleQuote <|> readDollarLonely False
 readDoubleQuotedDollar = do
     ensureDollar
-    readDollarExp <|> readDollarLonely True
+    readDollarExp True <|> readDollarLonely True
 
 
 prop_readDollarExpression1 = isOk readDollarExpression "$(((1) && 3))"
@@ -1709,9 +1709,9 @@ prop_readDollarExpression3 = isWarning readDollarExpression "$((\"$@\" &); foo;)
 readDollarExpression :: Monad m => SCParser m Token
 readDollarExpression = do
     ensureDollar
-    readDollarExp
+    readDollarExp False
 
-readDollarExp = arithmetic <|> readDollarExpansion <|> readDollarBracket <|> readDollarBraceCommandExpansion <|> readDollarBraced <|> readDollarVariable
+readDollarExp quoted = arithmetic <|> readDollarExpansion <|> readDollarBracket <|> readDollarBraceCommandExpansion <|> readDollarBraced <|> readDollarVariable quoted
   where
     arithmetic = readAmbiguous "$((" readDollarArithmetic readDollarExpansion (\pos -> do
         irix <- isIrixShell
@@ -1821,14 +1821,16 @@ readDollarExpansion = called "command expansion" $ do
     id <- endSpan start
     return $ T_DollarExpansion id cmds
 
-prop_readDollarVariable = isOk readDollarVariable "$@"
-prop_readDollarVariable2 = isOk (readDollarVariable >> anyChar) "$?!"
-prop_readDollarVariable3 = isWarning (readDollarVariable >> anyChar) "$10"
-prop_readDollarVariable4 = isWarning (readDollarVariable >> string "[@]") "$arr[@]"
-prop_readDollarVariable5 = isWarning (readDollarVariable >> string "[f") "$arr[f"
+prop_readDollarVariable = isOk (readDollarVariable False) "$@"
+prop_readDollarVariable2 = isOk (readDollarVariable False >> anyChar) "$?!"
+prop_readDollarVariable3 = isWarning (readDollarVariable False >> anyChar) "$10"
+prop_readDollarVariable4 = isWarning (readDollarVariable False >> string "[@]") "$arr[@]"
+prop_readDollarVariable5 = isWarning (readDollarVariable False >> string "[f") "$arr[f"
+prop_readDollarVariableIrixQuotedRegexClass = isOk readScript "# shellcheck shell=irix-sh\negrep \"^$DSK[ \\t][ \\t]*$MOUNTPT[ \\t]\" file\n"
+prop_readDollarVariableIrixQuotedArray = isWarning readScript "# shellcheck shell=irix-sh\necho \"$array[0]\"\n"
 
-readDollarVariable :: Monad m => SCParser m Token
-readDollarVariable = do
+readDollarVariable :: Monad m => Bool -> SCParser m Token
+readDollarVariable quoted = do
     start <- startSpan
     pos <- getPosition
 
@@ -1849,12 +1851,30 @@ readDollarVariable = do
         value <- wrapString readVariableName
         id <- endSpan start
         return (T_DollarBraced id False value) `attempting` do
-            lookAhead $ char '['
-            parseNoteAt pos ErrorC 1087 "Use braces when expanding arrays, e.g. ${array[idx]} (or ${var}[.. to quiet)."
+            isIrixRegex <- isIrixQuotedRegexClass
+            unless isIrixRegex $ do
+                lookAhead $ char '['
+                parseNoteAt pos ErrorC 1087 "Use braces when expanding arrays, e.g. ${array[idx]} (or ${var}[.. to quiet)."
 
     try $ char '$' >> (positional <|> special <|> regular)
 
   where
+    -- IRIX scripts commonly put escaped whitespace classes immediately after
+    -- variables in quoted grep patterns. These are regexes, not array indices.
+    isIrixQuotedRegexClass
+        | not quoted = return False
+        | otherwise = do
+            irix <- isIrixShell
+            if irix
+            then isFollowedBy escapedWhitespaceClass
+            else return False
+
+    escapedWhitespaceClass = do
+        char '['
+        contents <- many1 $ noneOf "]\r\n"
+        char ']'
+        guard $ any (`isInfixOf` contents) ["\\t", "\\n", "\\r"]
+
     wrapString p = do
         start <- getPosition
         s <- p

@@ -300,6 +300,10 @@ prop_irixAcceptsLegacyBackticks =
     3068 `notElem` checkIrix "value=`echo hi`"
 prop_irixAcceptsMultiwordAssignment =
     2037 `notElem` checkIrix "CSU=csu_off -C"
+prop_irixAcceptsQuotedRegexClasses =
+    1087 `notElem` checkIrix "egrep \"^$DSK[ \\t][ \\t]*$MOUNTPT[ \\t]\" file"
+prop_irixStillDiagnosesUnbracedArray =
+    1087 `elem` checkIrix "echo \"$array[0]\""
 prop_irixRejectsDollarCommandSubstitution =
     3068 `elem` checkIrix "value=$(echo hi)"
 prop_irixStillFindsConstantComparison =
