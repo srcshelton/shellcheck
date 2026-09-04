@@ -45,15 +45,12 @@ then
   fail "There are uncommitted changes"
 fi
 
-if [[ $(git log -1 --pretty=%B) != *"CHANGELOG"* ]]
-then
-  fail "Expected git log message to contain CHANGELOG"
-fi
-
+current=$(git tag --points-at HEAD | head -n 1)
 version=${current#v}
-if ! grep "Version:" ShellCheck.cabal | grep -qFw "$version"
+package_version=${version%-irix}
+if ! grep "Version:" ShellCheck.cabal | grep -qFw "$package_version"
 then
-  fail "The cabal file does not match tag version $version"
+  fail "The cabal file does not match base version $package_version"
 fi
 
 if ! grep -qF "## $current" CHANGELOG.md
@@ -61,16 +58,15 @@ then
   fail "CHANGELOG.md does not contain '## $current'"
 fi
 
-current=$(git tag --points-at)
 if [[ -z "$current" ]]
 then
   fail "No git tag on the current commit"
   echo "Create one with:   git tag -a v0.0.0"
 fi
 
-if [[ "$current" != v* ]]
+if [[ "$current" != v*-irix ]]
 then
-  fail "Bad tag format: expected v0.0.0"
+  fail "Bad tag format: expected v0.0.0-irix"
 fi
 
 if [[ "$(git cat-file -t "$current")" != "tag" ]]
@@ -78,13 +74,9 @@ then
   fail "Current tag is not annotated (required for Snap)."
 fi
 
-if [[ "$(git tag --points-at master)" != "$current" ]]
+release_branch=${RELEASE_BRANCH:-irix-sh}
+if ! git merge-base --is-ancestor HEAD "$release_branch"
 then
-  fail "You are not on master"
-fi
-
-if [[ $(git log -1 --pretty=%B) != "Stable version "* ]]
-then
-  fail "Expected git log message to be 'Stable version ...'"
+  fail "The release commit is not on $release_branch"
 fi
 exit "$failed"

@@ -1,20 +1,21 @@
 #!/bin/bash
-set -x
+set -euxo pipefail
 shopt -s extglob
 
 export EDITOR="touch"
 
-# Sanity check
-gh --version || exit 1
-hub release show latest || exit 1
+gh --version
 
 for tag in $TAGS
 do
-  if ! hub release show "$tag"
+  if ! gh release view "$tag" >/dev/null 2>&1
   then
     echo "Creating new release $tag"
     git show --no-patch  --format='format:%B' > description
-    hub release create -F description "$tag"
+    gh release create "$tag" \
+      --target "${GITHUB_SHA:-HEAD}" \
+      --title "$tag" \
+      --notes-file description
   fi
 
   files=()
@@ -24,5 +25,10 @@ do
     [[ $file == *"$tag"* ]] || continue
     files+=("$file")
   done
-  gh release upload "$tag" "${files[@]}" --clobber || exit 1
+  if [[ ${#files[@]} -eq 0 ]]
+  then
+    echo "No release files found for $tag" >&2
+    exit 1
+  fi
+  gh release upload "$tag" "${files[@]}" --clobber
 done

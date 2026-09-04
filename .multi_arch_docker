@@ -26,6 +26,7 @@ function multi_arch_docker::buildx() {
     --push \
     --progress plain \
     -f Dockerfile.multi-arch \
+    --build-arg "url_base=${RELEASE_URL_BASE:-https://github.com/koalaman/shellcheck/releases/download/}" \
     "$@" \
     /tmp/empty
   rmdir /tmp/empty

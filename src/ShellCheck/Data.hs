@@ -21,7 +21,7 @@ Use:
 -}
 
 import Paths_ShellCheck (version)
-shellcheckVersion = showVersion version  -- VERSIONSTRING
+shellcheckVersion = showVersion version ++ "-irix"  -- VERSIONSTRING
 
 
 internalVariables = [
