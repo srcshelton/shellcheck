@@ -45,6 +45,11 @@ flag dev-mode
     manual: True
     default: False
 
+flag irix-legacy-ghc
+    description: Build with the legacy GHC/deepseq used by the experimental IRIX bootstrap
+    manual: True
+    default: False
+
 library
     hs-source-dirs: src
     if impl(ghc < 8.0)
@@ -58,7 +63,6 @@ library
       base                 >= 4.8.0.0 && < 5,
       bytestring           >= 0.10.6 && < 0.13,
       containers           >= 0.5.6 && < 0.9,
-      deepseq              >= 1.4.2 && < 1.6,
       Diff                 >= 0.4.0 && < 1.1,
       fgl                  (>= 5.7.0 && < 5.8.1.0) || (>= 5.8.1.1 && < 5.9),
       filepath             >= 1.4.0 && < 1.6,
@@ -70,6 +74,15 @@ library
 
       -- getXdgDirectory from 1.2.3.0
       directory            >= 1.2.3 && < 1.4
+    if flag(irix-legacy-ghc)
+      -- GHC 7.10.3 bundles deepseq-1.4.1.1, which lacks the STRef
+      -- NFData instance used by Generic deriving.
+      build-depends:
+        deepseq            >= 1.4.1.1 && < 1.6
+      cpp-options: -DIRIX_LEGACY_GHC
+    else
+      build-depends:
+        deepseq            >= 1.4.2 && < 1.6
     exposed-modules:
       ShellCheck.AST
       ShellCheck.ASTLib

@@ -20,6 +20,7 @@
 {-# LANGUAGE TemplateHaskell #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE DeriveAnyClass, DeriveGeneric #-}
+{-# LANGUAGE CPP #-}
 
 {-
     Data Flow Analysis on a Control Flow Graph.
@@ -510,7 +511,22 @@ data StackEntry s = StackEntry {
     -- The original input state for this stack entry
     stackState :: InternalState
 }
+#if defined(IRIX_LEGACY_GHC)
+    deriving (Eq, Generic)
+
+-- deepseq-1.4.2 added a deliberately shallow NFData instance for STRef.
+-- Match that behaviour without adding a global orphan instance when building
+-- with the older deepseq supplied by the experimental IRIX bootstrap compiler.
+instance NFData (StackEntry s) where
+    rnf entry =
+        rnf (entryPoint entry) `seq`
+        rnf (isFunctionCall entry) `seq`
+        rnf (callSite entry) `seq`
+        dependencies entry `seq`
+        rnf (stackState entry)
+#else
     deriving (Eq, Generic, NFData)
+#endif
 
 -- Overwrite a base state with the contents of a diff state
 -- This is unrelated to join/merge.
