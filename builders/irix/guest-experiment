@@ -1,0 +1,410 @@
+#!/bin/sh
+
+# This script runs under IRIX /sbin/sh inside the disposable worker guest.
+# IRIX /sbin/sh requires the historical command-substitution form.
+# shellcheck disable=SC2006
+set -u
+
+stage=${IRIX_EXPERIMENT_STAGE-}
+case "$stage" in
+    environment|toolchain|ghc-configure) ;;
+    *) echo "guest-experiment: unsupported stage: $stage" >&2; exit 2 ;;
+esac
+
+PATH=/usr/sgug/bin:/usr/sgug/sbin:/usr/bin:/bin:/usr/sbin:/usr/bsd:/usr/nekoware/bin
+export PATH
+
+run_root="/var/tmp/shellcheck-irix-experiment-$$"
+repository="$run_root/repository"
+artifact_dir=/job/artifacts/irix-experiment
+ghc_tree=
+guest_status=0
+
+capture_ghc_evidence()
+{
+    [ -n "$ghc_tree" ] || return 0
+    for evidence in config.log mk/config.mk ghc/includes/ghcautoconf.h ghc/includes/DerivedConstants.h ghc/includes/GHCConstants.h
+    do
+        if [ -f "$ghc_tree/$evidence" ]
+        then
+            evidence_name=`echo "$evidence" | tr / _`
+            cp "$ghc_tree/$evidence" "$artifact_dir/$evidence_name" 2>/dev/null || true
+        fi
+    done
+}
+
+# Invoked indirectly by the EXIT trap.
+# shellcheck disable=SC2329
+finish()
+{
+    trap - 0
+    capture_ghc_evidence
+    printf '%s\n' "$guest_status" > /job/guest-status.tmp
+    mv /job/guest-status.tmp /job/guest-status
+    exit "$guest_status"
+}
+
+fail()
+{
+    echo "guest-experiment: $*" >&2
+    guest_status=1
+    exit "$guest_status"
+}
+
+trap finish 0
+trap 'guest_status=130; exit 130' 1 2 3 15
+
+mkdir -p "$repository" "$artifact_dir" || fail 'could not prepare working directories'
+(
+    cd "$repository" || exit 1
+    tar xf /job/repository.tar
+) || fail 'could not extract repository'
+
+{
+    echo '== date =='
+    date -u
+    echo '== uname -a =='
+    uname -a
+    echo '== uname -R =='
+    uname -R 2>&1 || true
+    echo '== hinv =='
+    hinv 2>&1 || true
+    echo '== compiler locations =='
+    type cc 2>&1 || true
+    type CC 2>&1 || true
+    type gcc 2>&1 || true
+    echo '== cc version =='
+    cc -version 2>&1 || true
+    echo '== CC version =='
+    CC -version 2>&1 || true
+    echo '== gcc version =='
+    gcc --version 2>&1 || true
+    echo '== bootstrap tools =='
+    type gmake 2>&1 || true
+    type make 2>&1 || true
+    type perl 2>&1 || true
+    type bzip2 2>&1 || true
+    echo '== possible GMP installations =='
+    find /usr/sgug /usr/nekoware /usr/local -name 'libgmp*' -o -name 'gmp.h' 2>/dev/null || true
+} > "$artifact_dir/environment.log" 2>&1
+cat "$artifact_dir/environment.log"
+
+irix_release=`uname -R 2>/dev/null || uname -r`
+case "$irix_release" in
+    *6.5.2[2-9]*|*6.5.30*) ;;
+    *) fail "IRIX 6.5.22 or newer is required; found: $irix_release" ;;
+esac
+
+[ "$stage" = environment ] && exit 0
+
+cat > "$run_root/toolchain-probe.c" <<'EOF'
+#include <stdio.h>
+
+static unsigned long mix(unsigned long value)
+{
+    return (value * 33UL) ^ (value >> 3);
+}
+
+int main(void)
+{
+    unsigned long value = mix(0x49524958UL);
+    printf("toolchain probe: %lu\n", value);
+    return value == 0 ? 1 : 0;
+}
+EOF
+
+for target in `sh "$repository/builders/irix/target-flags" --list`
+do
+    flags=`sh "$repository/builders/irix/target-flags" "$target"` ||
+        fail "could not select flags for $target"
+    target_binary="$run_root/$target.probe"
+    artifact_binary="$artifact_dir/$target.probe"
+    compiler_log="$run_root/$target.compiler.log"
+    target_log="$artifact_dir/$target.log"
+    echo "== $target: cc $flags =="
+    # The selected target is trusted repository data and must become separate
+    # MIPSpro arguments.
+    # shellcheck disable=SC2086
+    set -- $flags
+    if ! cc "$@" "$run_root/toolchain-probe.c" -o "$target_binary" > "$compiler_log" 2>&1
+    then
+        cp "$compiler_log" "$target_log"
+        cat "$compiler_log" >&2
+        fail "MIPSpro does not support the requested $target flags"
+    fi
+    {
+        cat "$compiler_log"
+        echo '== file =='
+        file "$target_binary"
+        if type elfdump >/dev/null 2>&1
+        then
+            echo '== elfdump -h =='
+            elfdump -h "$target_binary"
+        fi
+    } > "$target_log" 2>&1 || {
+        cat "$target_log" >&2
+        fail "$target toolchain probe could not be inspected"
+    }
+    cp "$target_binary" "$artifact_binary" || fail "could not preserve $target probe"
+    case "$target" in
+        irix.mips3.n32.r4k)
+            {
+                echo '== execution on emulated R4400 =='
+                "$target_binary"
+            } >> "$target_log" 2>&1 || {
+                cat "$target_log" >&2
+                fail "$target toolchain probe did not execute"
+            }
+            ;;
+        *)
+            echo '== execution deferred: this IP22/R4400 cannot execute MIPS IV ==' >> "$target_log"
+            ;;
+    esac
+    cat "$target_log"
+done
+
+bootstrap_gcc_flags=`sh "$repository/builders/irix/target-flags" --bootstrap-gcc` ||
+    fail 'could not select bootstrap GCC flags'
+bootstrap_gcc_probe="$run_root/irix.mips3.n32.r4k.gcc-bootstrap.probe"
+bootstrap_gcc_log="$artifact_dir/irix.mips3.n32.r4k.gcc-bootstrap.log"
+# shellcheck disable=SC2086
+set -- $bootstrap_gcc_flags
+if ! gcc "$@" -O2 "$run_root/toolchain-probe.c" -o "$bootstrap_gcc_probe" \
+    > "$bootstrap_gcc_log" 2>&1
+then
+    cat "$bootstrap_gcc_log" >&2
+    fail 'GCC cannot build the N32/MIPS III bootstrap baseline'
+fi
+{
+    file "$bootstrap_gcc_probe"
+    "$bootstrap_gcc_probe"
+} >> "$bootstrap_gcc_log" 2>&1 || {
+    cat "$bootstrap_gcc_log" >&2
+    fail 'the GCC bootstrap probe did not execute'
+}
+if ! grep 'ELF N32.*mips-3' "$bootstrap_gcc_log" >/dev/null 2>&1
+then
+    cat "$bootstrap_gcc_log" >&2
+    fail 'GCC bootstrap probe has the wrong ABI or ISA'
+fi
+cp "$bootstrap_gcc_probe" "$artifact_dir/" || fail 'could not preserve GCC probe'
+cat "$bootstrap_gcc_log"
+
+[ "$stage" = toolchain ] && exit 0
+
+source_archive="/job/ghc-6.4.2-src.tar"
+[ -f "$source_archive" ] || fail "missing $source_archive"
+perl_source_archive=/job/perl-5.8.9.tar
+[ -f "$perl_source_archive" ] || fail "missing $perl_source_archive"
+gmp_source_archive=/job/gmp-4.2.1.tar
+[ -f "$gmp_source_archive" ] || fail "missing $gmp_source_archive"
+cd "$run_root" || fail 'could not enter working directory'
+tar xf "$source_archive" || fail 'could not extract GHC source'
+ghc_tree="$run_root/ghc-6.4.2"
+[ -d "$ghc_tree" ] || fail 'GHC source tree has unexpected layout'
+
+echo '== building the bootstrap miniperl =='
+tar xf "$perl_source_archive" || fail 'could not extract Perl source'
+perl_tree="$run_root/perl-5.8.9"
+[ -d "$perl_tree" ] || fail 'Perl source tree has unexpected layout'
+cd "$perl_tree" || fail 'could not enter Perl source tree'
+
+# Configure offers to run a full dependency scan. A clean miniperl build
+# compiles every listed object anyway, while that scan takes tens of minutes
+# under emulation. Delegate every other recursive make invocation to GNU make.
+perl_make_wrapper="$run_root/perl-bootstrap-make"
+cat > "$perl_make_wrapper" <<'EOF'
+#!/bin/sh
+if [ "${1-}" = depend ]
+then
+    echo 'Skipping optional dependency scan for the clean miniperl bootstrap.'
+    exit 0
+fi
+exec /usr/nekoware/bin/gmake "$@"
+EOF
+chmod +x "$perl_make_wrapper" || fail 'could not prepare the Perl make wrapper'
+
+# Perl's IRIX hints append MIPSpro's -Wl,-woff,84 even when Configure was
+# explicitly given GCC. Keep that historical source pristine and filter only
+# the two unsupported, optional driver flags at this bootstrap boundary.
+perl_gcc_wrapper="$run_root/perl-bootstrap-gcc"
+cat > "$perl_gcc_wrapper" <<'EOF'
+#!/bin/sh
+for argument
+do
+    shift
+    case "$argument" in
+        -Wl,-woff,84|-pipe) ;;
+        *) set -- "$@" "$argument" ;;
+    esac
+done
+exec /usr/nekoware/bin/gcc "$@"
+EOF
+chmod +x "$perl_gcc_wrapper" || fail 'could not prepare the Perl GCC wrapper'
+PATH="$run_root:$PATH"
+export PATH
+
+if ! sh Configure -des \
+    -Dprefix="$run_root/perl-bootstrap" \
+    -Dcc="$perl_gcc_wrapper $bootstrap_gcc_flags" \
+    -Doptimize='-O1' \
+    -Dlibswanted='m c' \
+    -Dmake="$perl_make_wrapper" \
+    > "$artifact_dir/perl-configure.log" 2>&1
+then
+    tail -200 "$artifact_dir/perl-configure.log" >&2
+    fail 'Perl 5.8.9 configuration failed'
+fi
+if ! gmake miniperl > "$artifact_dir/perl-miniperl.log" 2>&1
+then
+    tail -200 "$artifact_dir/perl-miniperl.log" >&2
+    fail 'Perl 5.8.9 miniperl build failed'
+fi
+./miniperl -Ilib -v > "$artifact_dir/perl-version.log" 2>&1 ||
+    fail 'the bootstrap miniperl does not execute'
+cat "$artifact_dir/perl-version.log"
+(
+    cd "$run_root" || exit 1
+    tar cf "$artifact_dir/perl-5.8.9-irix.mips3.n32.r4k-bootstrap.tar" \
+        perl-5.8.9/miniperl perl-5.8.9/lib
+) || fail 'could not preserve the miniperl bootstrap'
+
+echo '== building the bootstrap GMP =='
+cd "$run_root" || fail 'could not enter working directory'
+tar xf "$gmp_source_archive" || fail 'could not extract GMP source'
+gmp_tree="$run_root/gmp-4.2.1"
+gmp_prefix="$run_root/gmp-bootstrap"
+[ -d "$gmp_tree" ] || fail 'GMP source tree has unexpected layout'
+cd "$gmp_tree" || fail 'could not enter GMP source tree'
+if ! CC=gcc CFLAGS="$bootstrap_gcc_flags -O2" \
+    ./configure --host=mips64-sgi-irix6 --prefix="$gmp_prefix" \
+        --disable-shared --enable-static --disable-assembly ABI=n32 \
+        > "$artifact_dir/gmp-configure.log" 2>&1
+then
+    tail -200 "$artifact_dir/gmp-configure.log" >&2
+    fail 'GMP 4.2.1 configuration failed'
+fi
+if ! gmake > "$artifact_dir/gmp-build.log" 2>&1
+then
+    tail -200 "$artifact_dir/gmp-build.log" >&2
+    fail 'GMP 4.2.1 build failed'
+fi
+if ! gmake install > "$artifact_dir/gmp-install.log" 2>&1
+then
+    tail -200 "$artifact_dir/gmp-install.log" >&2
+    fail 'GMP 4.2.1 installation failed'
+fi
+cat > "$run_root/gmp-probe.c" <<'EOF'
+#include <stdio.h>
+#include <gmp.h>
+
+int main(void)
+{
+    mpz_t value;
+    mpz_init_set_ui(value, 65537UL);
+    mpz_mul_ui(value, value, 257UL);
+    printf("gmp bootstrap probe: %lu\n", mpz_get_ui(value));
+    mpz_clear(value);
+    return 0;
+}
+EOF
+# shellcheck disable=SC2086
+set -- $bootstrap_gcc_flags
+if ! gcc "$@" -O2 -I"$gmp_prefix/include" "$run_root/gmp-probe.c" \
+    "$gmp_prefix/lib/libgmp.a" -o "$run_root/gmp-bootstrap.probe" \
+    > "$artifact_dir/gmp-probe.log" 2>&1
+then
+    cat "$artifact_dir/gmp-probe.log" >&2
+    fail 'GMP bootstrap probe did not compile'
+fi
+{
+    file "$run_root/gmp-bootstrap.probe"
+    "$run_root/gmp-bootstrap.probe"
+} >> "$artifact_dir/gmp-probe.log" 2>&1 || {
+    cat "$artifact_dir/gmp-probe.log" >&2
+    fail 'GMP bootstrap probe did not execute'
+}
+if ! grep 'ELF N32.*mips-3' "$artifact_dir/gmp-probe.log" >/dev/null 2>&1
+then
+    cat "$artifact_dir/gmp-probe.log" >&2
+    fail 'GMP bootstrap probe has the wrong ABI or ISA'
+fi
+cat "$artifact_dir/gmp-probe.log"
+(
+    cd "$run_root" || exit 1
+    tar cf "$artifact_dir/gmp-4.2.1-irix.mips3.n32.r4k-bootstrap.tar" \
+        gmp-bootstrap
+) || fail 'could not preserve the GMP bootstrap'
+
+cd "$ghc_tree" || fail 'could not enter GHC source tree'
+CC=gcc
+CFLAGS="$bootstrap_gcc_flags -O2"
+CPPFLAGS="-I$gmp_prefix/include"
+LDFLAGS="-L$gmp_prefix/lib"
+export CC CFLAGS CPPFLAGS LDFLAGS
+
+perl_wrapper="$run_root/perl-ghc-6.4.2"
+{
+    echo '#!/bin/sh'
+    printf 'exec "%s/miniperl" -I"%s/lib" "$@"\n' "$perl_tree" "$perl_tree"
+} > "$perl_wrapper"
+chmod +x "$perl_wrapper" || fail 'could not prepare the Perl configure wrapper'
+PerlCmd="$perl_wrapper"
+export PerlCmd
+
+echo '== configuring the GHC 6.4.2 unregisterised IRIX seed =='
+# Documentation is outside this fail-fast target-header gate. Avoid an old
+# xmllint attempting to resolve the remote DocBook DTD from the isolated guest.
+ac_cv_path_XmllintCmd=
+ac_cv_path_XsltprocCmd=
+export ac_cv_path_XmllintCmd ac_cv_path_XsltprocCmd
+if ! ./configure --enable-hc-boot --enable-hc-boot-unregisterised \
+    > "$artifact_dir/ghc-configure.log" 2>&1
+then
+    cat "$artifact_dir/ghc-configure.log" >&2
+    fail 'GHC 6.4.2 target configuration failed'
+fi
+cat "$artifact_dir/ghc-configure.log"
+
+if gmake --version 2>&1 | grep 'GNU Make' >/dev/null
+then
+    # Assign the command name rather than its output.
+    # shellcheck disable=SC2209
+    make_command=gmake
+elif make --version 2>&1 | grep 'GNU Make' >/dev/null
+then
+    # shellcheck disable=SC2209
+    make_command=make
+else
+    fail 'GNU make is required for the GHC bootstrap'
+fi
+
+echo '== generating target-dependent GHC headers =='
+if ! "$make_command" -C ghc/includes "CC=gcc $bootstrap_gcc_flags" \
+    > "$artifact_dir/ghc-includes.log" 2>&1
+then
+    cat "$artifact_dir/ghc-includes.log" >&2
+    fail 'GHC 6.4.2 target-header generation failed'
+fi
+cat "$artifact_dir/ghc-includes.log"
+{
+    file ghc/includes/mkDerivedConstantsHdr
+    file ghc/includes/mkGHCConstants
+} > "$artifact_dir/ghc-header-tools.log" 2>&1 || {
+    cat "$artifact_dir/ghc-header-tools.log" >&2
+    fail 'GHC target-header helpers could not be inspected'
+}
+if [ "`grep -c 'ELF N32.*mips-3' "$artifact_dir/ghc-header-tools.log"`" -ne 2 ]
+then
+    cat "$artifact_dir/ghc-header-tools.log" >&2
+    fail 'GHC target-header helpers have the wrong ABI or ISA'
+fi
+cat "$artifact_dir/ghc-header-tools.log"
+for required_header in ghcautoconf.h DerivedConstants.h GHCConstants.h
+do
+    [ -s "ghc/includes/$required_header" ] ||
+        fail "GHC did not generate ghc/includes/$required_header"
+done
+
+capture_ghc_evidence
+echo 'GHC 6.4.2 target configuration prerequisite completed.'
