@@ -3731,7 +3731,9 @@ checkReadWithoutR _ _ = return ()
 
 prop_checkCpLegacyR1 = verify checkCpLegacyR "cp -r foo bar"
 prop_checkCpLegacyR2 = verifyNot checkCpLegacyR "cp -R foo bar"
-checkCpLegacyR params t@T_SimpleCommand {} | t `isUnqualifiedCommand` "cp" = case legacyFlag of
+prop_checkCpLegacyR3 = verifyNot checkCpLegacyR "# shellcheck shell=irix-sh\ncp -r foo bar"
+checkCpLegacyR params t@T_SimpleCommand {} | t `isUnqualifiedCommand` "cp"
+    && shellType params /= IrixSh = case legacyFlag of
   Just (t, _) -> warnWithFix (getId t) 2336 "cp -r behavior is implementation-defined"
                      (fixWith [replaceToken (getId t) params "-R"])
   Nothing -> return ()
