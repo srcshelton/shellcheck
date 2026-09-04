@@ -228,6 +228,48 @@ optionalTreeChecks = [
     }, nodeChecksToTreeCheck [checkVerboseSpacefulnessCfg])
 
     ,(newCheckDescription {
+        cdName = "prefer-single-quotes",
+        cdDescription = "Suggest single quotes for constant strings",
+        cdPositive = "var=\"constant\"",
+        cdNegative = "var='constant'"
+    }, nodeChecksToTreeCheck [checkPreferSingleQuotes])
+
+    ,(newCheckDescription {
+        cdName = "require-quoted-parameter-expansion-words",
+        cdDescription = "Suggest double quoting default and assignment words in parameter expansions",
+        cdPositive = "echo \"${var:-default}\"",
+        cdNegative = "echo \"${var:-\"default\"}\""
+    }, nodeChecksToTreeCheck [checkQuotedParameterExpansionWords])
+
+    ,(newCheckDescription {
+        cdName = "require-single-quoted-case-patterns",
+        cdDescription = "Suggest single quoting constant portions of case patterns",
+        cdPositive = "case $var in value*) echo yes;; esac",
+        cdNegative = "case $var in 'value'*) echo yes;; esac"
+    }, nodeChecksToTreeCheck [checkSingleQuotedCasePatterns])
+
+    ,(newCheckDescription {
+        cdName = "prefer-env-shebangs",
+        cdDescription = "Suggest env-based shebangs for non-sh shells",
+        cdPositive = "#!/bin/bash\ntrue",
+        cdNegative = "#! /usr/bin/env bash\ntrue"
+    }, nodeChecksToTreeCheck [checkEnvShebang])
+
+    ,(newCheckDescription {
+        cdName = "require-shebang-space",
+        cdDescription = "Suggest a space between #! and the interpreter",
+        cdPositive = "#!/bin/sh\ntrue",
+        cdNegative = "#! /bin/sh\ntrue"
+    }, nodeChecksToTreeCheck [checkShebangSpace])
+
+    ,(newCheckDescription {
+        cdName = "require-variable-quotes",
+        cdDescription = "Suggest double quoting variable expansions wherever quotes preserve their role",
+        cdPositive = "[[ ${var} ]]",
+        cdNegative = "[[ \"${var}\" ]]"
+    }, nodeChecksToTreeCheck [checkVariableQuotes])
+
+    ,(newCheckDescription {
         cdName = "avoid-nullary-conditions",
         cdDescription = "Suggest explicitly using -n in `[ $var ]`",
         cdPositive = "[ \"$var\" ]",
@@ -2265,6 +2307,143 @@ checkVariableBraces params t@(T_DollarBraced id False l)
     fixFor token = fixWith [replaceStart (getId token) params 1 "${"
                            ,replaceEnd (getId token) params 0 "}"]
 checkVariableBraces _ _ = return ()
+
+
+prop_checkPreferSingleQuotes1 = verify checkPreferSingleQuotes "var=\"constant\""
+prop_checkPreferSingleQuotes2 = verifyNot checkPreferSingleQuotes "var='constant'"
+prop_checkPreferSingleQuotes3 = verifyNot checkPreferSingleQuotes "var=\"value: $var\""
+prop_checkPreferSingleQuotes4 = verifyNot checkPreferSingleQuotes "echo \"${var:-\"default\"}\""
+prop_checkPreferSingleQuotes5 = verifyNot checkPreferSingleQuotes "var=\"it's fine\""
+checkPreferSingleQuotes params t@(T_DoubleQuoted id parts)
+    | all isLiteral parts
+    , '\'' `notElem` value
+    , not insideParameterExpansion =
+        style id 2338 "Prefer single quotes for constant strings."
+  where
+    value = concatMap onlyLiteralString parts
+    insideParameterExpansion = any isParameterExpansion $ tail $ NE.toList path
+    path = getPath (parentMap params) t
+    isParameterExpansion T_DollarBraced {} = True
+    isParameterExpansion _ = False
+checkPreferSingleQuotes _ _ = return ()
+
+
+prop_checkQuotedParameterExpansionWords1 = verify checkQuotedParameterExpansionWords "echo \"${var:-default}\""
+prop_checkQuotedParameterExpansionWords2 = verify checkQuotedParameterExpansionWords "echo \"${var:=assigned}\""
+prop_checkQuotedParameterExpansionWords3 = verify checkQuotedParameterExpansionWords "echo \"${var:-${default}}\""
+prop_checkQuotedParameterExpansionWords4 = verifyNot checkQuotedParameterExpansionWords "echo \"${var:-\"default\"}\""
+prop_checkQuotedParameterExpansionWords5 = verifyNot checkQuotedParameterExpansionWords "echo \"${var:=\"assigned\"}\""
+prop_checkQuotedParameterExpansionWords6 = verifyNot checkQuotedParameterExpansionWords "echo \"${var:+alternate}\""
+prop_checkQuotedParameterExpansionWords7 = verifyNot checkQuotedParameterExpansionWords "echo \"${var:-}\""
+checkQuotedParameterExpansionWords _ (T_DollarBraced id True (T_NormalWord _ (T_Literal _ first:rest))) =
+    case find (`isPrefixOf` modifier) [":-", ":=", "-", "="] of
+        Just operator
+            | hasWord operator && not (isDoubleQuotedWord operator) ->
+                style id 2339 "Prefer double quoting this parameter expansion word."
+        _ -> return ()
+  where
+    modifier = getBracedModifier first
+    remainder operator = drop (length operator) modifier
+    hasWord operator = not (null $ remainder operator) || not (null rest)
+    isDoubleQuotedWord operator =
+        null (remainder operator) && not (null rest) && all isDoubleQuoted rest
+    isDoubleQuoted T_DoubleQuoted {} = True
+    isDoubleQuoted _ = False
+checkQuotedParameterExpansionWords _ _ = return ()
+
+
+prop_checkSingleQuotedCasePatterns1 = verify checkSingleQuotedCasePatterns "case $var in value) echo yes;; esac"
+prop_checkSingleQuotedCasePatterns2 = verifyNot checkSingleQuotedCasePatterns "case $var in 'value') echo yes;; esac"
+prop_checkSingleQuotedCasePatterns3 = verify checkSingleQuotedCasePatterns "case $var in val*) echo yes;; esac"
+prop_checkSingleQuotedCasePatterns4 = verifyNot checkSingleQuotedCasePatterns "case $var in $value) echo yes;; esac"
+prop_checkSingleQuotedCasePatterns5 = verifyNot checkSingleQuotedCasePatterns "case $var in 'val'*) echo yes;; esac"
+prop_checkSingleQuotedCasePatterns6 = verifyNot checkSingleQuotedCasePatterns "case $var in '*') echo yes;; esac"
+checkSingleQuotedCasePatterns _ (T_CaseExpression _ _ cases) =
+    mapM_ checkPattern [pattern | (_, patterns, _) <- cases, pattern <- patterns]
+  where
+    checkPattern (T_NormalWord _ parts) = mapM_ checkPart parts
+    checkPattern _ = return ()
+    checkPart (T_Literal id value)
+        | not (null value) = style id 2340 "Prefer single quotes for constant portions of case patterns."
+    checkPart _ = return ()
+checkSingleQuotedCasePatterns _ _ = return ()
+
+
+prop_checkEnvShebang1 = verify checkEnvShebang "#!/bin/bash\ntrue"
+prop_checkEnvShebang2 = verifyNot checkEnvShebang "#! /usr/bin/env bash\ntrue"
+prop_checkEnvShebang3 = verifyNot checkEnvShebang "#! /sbin/env bash\ntrue"
+prop_checkEnvShebang4 = verifyNot checkEnvShebang "#!/bin/sh\ntrue"
+prop_checkEnvShebang5 = verifyNot checkEnvShebang "#!/bin/busybox sh\ntrue"
+checkEnvShebang _ (T_Script _ (T_Literal id shebang) _) =
+    case words shebang of
+        interpreter:_
+            | basename interpreter `notElem` ["env", "busybox"]
+            , Just shell <- shellForExecutable $ executableFromShebang shebang
+            , shell /= Sh ->
+                style id 2341 "Prefer an env-based shebang for non-sh shells."
+        _ -> return ()
+  where
+    basename = reverse . takeWhile (/= '/') . reverse
+checkEnvShebang _ _ = return ()
+
+
+prop_checkShebangSpace1 = verify checkShebangSpace "#!/bin/sh\ntrue"
+prop_checkShebangSpace2 = verifyNot checkShebangSpace "#! /bin/sh\ntrue"
+checkShebangSpace params (T_Script _ (T_Literal id shebang) _)
+    | not (null shebang)
+    , Just (start, end) <- Map.lookup id $ tokenPositions params
+    , posColumn end - posColumn start == fromIntegral (2 + length shebang) =
+        style id 2342 "Prefer a space between '#!' and the interpreter."
+checkShebangSpace _ _ = return ()
+
+
+prop_checkVariableQuotes1 = verify checkVariableQuotes "echo $var"
+prop_checkVariableQuotes2 = verify checkVariableQuotes "value=$var"
+prop_checkVariableQuotes3 = verify checkVariableQuotes "[[ ${var} ]]"
+prop_checkVariableQuotes4 = verify checkVariableQuotes "case ${var} in *) true;; esac"
+prop_checkVariableQuotes5 = verifyNot checkVariableQuotes "echo \"${var}\""
+prop_checkVariableQuotes6 = verifyNot checkVariableQuotes "(( total += $var ))"
+prop_checkVariableQuotes7 = verifyNot checkVariableQuotes "[[ value == ${pattern} ]]"
+prop_checkVariableQuotes8 = verifyNot checkVariableQuotes "case value in ${pattern}) true;; esac"
+prop_checkVariableQuotes9 = verifyNot checkVariableQuotes "cat <<EOF\n${var}\nEOF"
+prop_checkVariableQuotes10 = verify checkVariableQuotes "echo \"${var:-${default}}\""
+checkVariableQuotes params token@(T_DollarBraced id _ contents)
+    | isVariableName name
+    , not alreadyQuoted
+    , not changesSyntacticRole =
+        style id 2343 "Prefer double quoting this variable expansion."
+  where
+    name = getBracedReference $ concat $ oversimplify contents
+    tree = parentMap params
+    path = NE.tail $ getPath tree token
+    alreadyQuoted = any isDoubleQuoted $ takeWhile (not . isParameterExpansion) path
+    changesSyntacticRole = any isSpecialContext path
+
+    isDoubleQuoted T_DoubleQuoted {} = True
+    isDoubleQuoted T_DollarDoubleQuoted {} = True
+    isDoubleQuoted _ = False
+    isParameterExpansion T_DollarBraced {} = True
+    isParameterExpansion _ = False
+
+    isSpecialContext T_Arithmetic {} = True
+    isSpecialContext T_DollarArithmetic {} = True
+    isSpecialContext TA_Sequence {} = True
+    isSpecialContext T_HereDoc {} = True
+    isSpecialContext parent@(TC_Binary _ DoubleBracket op _ rhs) =
+        op `elem` ["=", "==", "!=", "=~"] && contains rhs token
+    isSpecialContext (T_CaseExpression _ _ cases) =
+        any (\(_, patterns, _) -> any (`contains` token) patterns) cases
+    isSpecialContext outer@(T_DollarBraced _ _ _)
+        | contains outer token = not $ isWordModifier outer
+    isSpecialContext _ = False
+
+    contains parent child =
+        getId parent == getId child || isParentOf tree parent child
+    isWordModifier (T_DollarBraced _ _ word) =
+        any (`isPrefixOf` getBracedModifier (concat $ oversimplify word))
+            [":-", ":=", ":+", ":?", "-", "=", "+", "?"]
+    isWordModifier _ = False
+checkVariableQuotes _ _ = return ()
 
 prop_checkQuotesInLiterals1 = verifyTree checkQuotesInLiterals "param='--foo=\"bar\"'; app $param"
 prop_checkQuotesInLiterals1a = verifyTree checkQuotesInLiterals "param=\"--foo='lolbar'\"; app $param"

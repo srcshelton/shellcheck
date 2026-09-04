@@ -2,6 +2,16 @@
 ### Added
 - SC2337: Optional `check-unused-suppressions` suggestion for unnecessary
   `disable` directives.
+- SC2338: Optional `prefer-single-quotes` suggestion for constant strings.
+- SC2339: Optional `require-quoted-parameter-expansion-words` suggestion for
+  default and assignment words in parameter expansions.
+- SC2340: Optional `require-single-quoted-case-patterns` suggestion for
+  constant portions of case patterns.
+- SC2341: Optional `prefer-env-shebangs` suggestion for non-sh interpreters.
+- SC2342: Optional `require-shebang-space` suggestion for placing a space
+  between `#!` and the interpreter.
+- SC2343: Optional `require-variable-quotes` suggestion for consistently
+  double quoting variable expansions where quoting preserves their role.
 
 ### Changed
 
