@@ -1827,6 +1827,7 @@ prop_readDollarVariable3 = isWarning (readDollarVariable False >> anyChar) "$10"
 prop_readDollarVariable4 = isWarning (readDollarVariable False >> string "[@]") "$arr[@]"
 prop_readDollarVariable5 = isWarning (readDollarVariable False >> string "[f") "$arr[f"
 prop_readDollarVariableIrixQuotedRegexClass = isOk readScript "# shellcheck shell=irix-sh\negrep \"^$DSK[ \\t][ \\t]*$MOUNTPT[ \\t]\" file\n"
+prop_readDollarVariableIrixQuotedRegexLiteralTab = isOk readScript "# shellcheck shell=irix-sh\negrep \"^$DSK[ \t][ \t]*$MOUNTPT[ \t]\" file\n"
 prop_readDollarVariableIrixQuotedArray = isWarning readScript "# shellcheck shell=irix-sh\necho \"$array[0]\"\n"
 
 readDollarVariable :: Monad m => Bool -> SCParser m Token
@@ -1859,21 +1860,23 @@ readDollarVariable quoted = do
     try $ char '$' >> (positional <|> special <|> regular)
 
   where
-    -- IRIX scripts commonly put escaped whitespace classes immediately after
-    -- variables in quoted grep patterns. These are regexes, not array indices.
+    -- IRIX scripts commonly put whitespace classes immediately after variables
+    -- in quoted grep patterns. These are regexes, not array indices.
     isIrixQuotedRegexClass
         | not quoted = return False
         | otherwise = do
             irix <- isIrixShell
             if irix
-            then isFollowedBy escapedWhitespaceClass
+            then isFollowedBy whitespaceRegexClass
             else return False
 
-    escapedWhitespaceClass = do
+    whitespaceRegexClass = do
         char '['
         contents <- many1 $ noneOf "]\r\n"
         char ']'
-        guard $ any (`isInfixOf` contents) ["\\t", "\\n", "\\r"]
+        guard $
+            '\t' `elem` contents ||
+                any (`isInfixOf` contents) ["\\t", "\\n", "\\r"]
 
     wrapString p = do
         start <- getPosition
