@@ -1,7 +1,11 @@
+{-# LANGUAGE TemplateHaskell #-}
 module ShellCheck.Data where
 
 import ShellCheck.Interface
+import Data.List (isInfixOf, stripPrefix)
 import Data.Version (showVersion)
+import Test.QuickCheck.All (forAllProperties)
+import Test.QuickCheck.Test (quickCheckWithResult, stdArgs, maxSuccess)
 
 
 {-
@@ -21,8 +25,18 @@ Use:
 -}
 
 import Paths_ShellCheck (version)
-shellcheckVersion = showVersion version ++ "-irix"  -- VERSIONSTRING
+shellcheckVersion = toIrixVersion (showVersion version ++ "-irix.4")  -- VERSIONSTRING
 
+-- Cabal package versions are numeric, so the fork suffix cannot live in
+-- ShellCheck.cabal.  Release builds replace the argument above with their
+-- exact git description; normal package builds retain the current fork release.
+toIrixVersion versionString =
+    case stripPrefix "v" versionString of
+        Just unprefixed | hasIrixSuffix unprefixed -> unprefixed
+        _ | hasIrixSuffix versionString -> versionString
+          | otherwise -> versionString ++ "-irix"
+  where
+    hasIrixSuffix = isInfixOf "-irix"
 
 internalVariables = [
     -- Generic
@@ -205,3 +219,16 @@ flagsForMapfile = "d:n:O:s:u:C:c:t"
 declaringCommands = ["local", "declare", "export", "readonly", "typeset", "let"]
 
 privilegeElevationCommands = ["sudo", "doas", "run0"]
+
+prop_toIrixVersionRelease3 =
+    toIrixVersion "v0.11.0-irix.3" == "0.11.0-irix.3"
+prop_toIrixVersionRelease4 =
+    toIrixVersion "v0.11.0-irix.4" == "0.11.0-irix.4"
+prop_toIrixVersionSnapshot =
+    toIrixVersion "v0.11.0-irix.4-2-g1234567" ==
+        "0.11.0-irix.4-2-g1234567"
+prop_toIrixVersionPackage =
+    toIrixVersion "0.11.0" == "0.11.0-irix"
+
+return []
+runDataTests = $forAllProperties $ quickCheckWithResult (stdArgs { maxSuccess = 1 })

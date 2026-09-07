@@ -1,3 +1,15 @@
+## v0.11.0-irix.4 - 2026-09-07
+### Added
+- `irix-ksh` models the Korn shell shipped with IRIX separately from `/sbin/sh`.
+
+### Changed
+- IRIX platform diagnostics now avoid advice which is unavailable or incorrect
+  on IRIX while retaining compatible semantic and opt-in style checks.
+- IRIX ksh models its native `echo` escape handling without suggesting `-e`.
+- Numbered fork releases report their complete identifier, such as
+  `0.11.0-irix.4`, across all precompiled binaries.
+
+
 ## v0.11.0-irix - 2026-09-04
 ### Added
 - `--sh-variant` and the corresponding `sh-variant` configuration key can map

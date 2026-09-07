@@ -46,8 +46,14 @@ then
 fi
 
 current=$(git tag --points-at HEAD | head -n 1)
+if [[ -z "$current" ]]
+then
+  fail "No git tag on the current commit"
+  echo "Create one with:   git tag -a v0.0.0-irix.1"
+fi
+
 version=${current#v}
-package_version=${version%-irix}
+package_version=${version%%-irix*}
 if ! grep "Version:" ShellCheck.cabal | grep -qFw "$package_version"
 then
   fail "The cabal file does not match base version $package_version"
@@ -58,15 +64,9 @@ then
   fail "CHANGELOG.md does not contain '## $current'"
 fi
 
-if [[ -z "$current" ]]
+if [[ ! "$current" =~ ^v[0-9]+(\.[0-9]+)*-irix(\.[0-9]+)?$ ]]
 then
-  fail "No git tag on the current commit"
-  echo "Create one with:   git tag -a v0.0.0"
-fi
-
-if [[ "$current" != v*-irix ]]
-then
-  fail "Bad tag format: expected v0.0.0-irix"
+  fail "Bad tag format: expected v0.0.0-irix or v0.0.0-irix.1"
 fi
 
 if [[ "$(git cat-file -t "$current")" != "tag" ]]

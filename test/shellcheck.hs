@@ -12,6 +12,7 @@ import qualified ShellCheck.Checks.Commands
 import qualified ShellCheck.Checks.ControlFlow
 import qualified ShellCheck.Checks.Custom
 import qualified ShellCheck.Checks.ShellSupport
+import qualified ShellCheck.Data
 import qualified ShellCheck.Fixer
 import qualified ShellCheck.Formatter.Diff
 import qualified ShellCheck.Parser
@@ -35,6 +36,7 @@ main = do
       , ("Checks.ControlFlow" , ShellCheck.Checks.ControlFlow.runTests)
       , ("Checks.Custom"      , ShellCheck.Checks.Custom.runTests)
       , ("Checks.ShellSupport", ShellCheck.Checks.ShellSupport.runTests)
+      , ("Data"               , ShellCheck.Data.runDataTests)
       , ("Fixer"              , ShellCheck.Fixer.runTests)
       , ("Formatter.Diff"     , ShellCheck.Formatter.Diff.runTests)
       , ("Parser"             , ShellCheck.Parser.runTests)
