@@ -38,6 +38,7 @@ import Prelude hiding (readFile)
 import Control.Monad
 
 import Test.QuickCheck.All
+import Test.QuickCheck (conjoin, counterexample)
 
 tokenToPosition startMap t = fromMaybe fail $ do
     span <- Map.lookup (tcId t) startMap
@@ -312,6 +313,47 @@ prop_irixStillFindsConstantComparison =
     2050 `elem` checkIrix "[ \"FA_PORT\" = \"80\" ]"
 prop_irixStillFindsConstantNullaryTest =
     2078 `elem` checkIrix "[ CONNTYPE ]"
+prop_irixOmitsInapplicablePlatformAdvice =
+    conjoin $ map checkCase cases
+  where
+    checkCase (code, source) =
+        counterexample ("Unexpected SC" ++ show code ++ " for: " ++ source) $
+            code `notElem` checkIrix source
+    cases =
+        [ (2001, "value=`echo \"$value\" | sed 's/a/b/g'`")
+        , (2003, "value=`expr 3 + 2`")
+        , (2009, "ps -ef | grep cron")
+        , (2021, "tr '[a-z]' '[A-Z]'")
+        , (2196, "egrep pattern file")
+        , (2197, "fgrep pattern file")
+        , (2267, "xargs -i echo {}")
+        , (2268, "[ x\"$value\" = x ]")
+        ]
+prop_irixAvoidsLetModernization =
+    2219 `notElem` checkIrix "let value=value+1"
+prop_irixRetainsApplicableStyleAdvice =
+    conjoin $ map checkCase cases
+  where
+    checkCase (code, source) =
+        counterexample ("Expected SC" ++ show code ++ " for: " ++ source) $
+            code `elem` checkIrix source
+    cases =
+        [ (2000, "value=`echo \"$value\" | wc -c`")
+        , (2004, "(( value = $value + 1 ))")
+        , (2005, "echo `date`")
+        , (2018, "tr 'a-z' 'A-Z'")
+        , (2019, "tr 'a-z' 'A-Z'")
+        , (2116, "command `echo value`")
+        , (2126, "grep pattern file | wc -l")
+        , (2129, "a >> file; b >> file; c >> file")
+        , (2162, "read value")
+        , (2181, "true; if [ $? -eq 0 ]; then echo yes; fi")
+        , (2233, "if ( test -f file ); then echo yes; fi")
+        , (2234, "( test -f file )")
+        , (2235, "( test -f one && test -f two )")
+        , (2308, "expr index \"$value\" abc")
+        , (2331, "[ -a file ]")
+        ]
 prop_irixWorkaroundsBecomeUnused =
     [2337, 2337] == result
   where

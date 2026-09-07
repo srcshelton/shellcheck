@@ -68,6 +68,17 @@ verifySeverity severity f s = do
     let params = makeParameters spec
     let comments = filterByAnnotation spec params $ runChecker params (getChecker [f])
     return $ not (null comments) && all ((== severity) . cSeverity . tcComment) comments
+verifyMessage f code message s = do
+    let parsed = pScript s
+    root <- prRoot parsed
+    let spec = defaultSpec parsed
+    let params = makeParameters spec
+    let comments = filterByAnnotation spec params $ runChecker params (getChecker [f])
+    return $ any matches comments
+  where
+    matches comment =
+        cCode (tcComment comment) == code
+            && cMessage (tcComment comment) == message
 
 commandChecks :: [CommandCheck]
 commandChecks = [
@@ -236,6 +247,7 @@ prop_checkTr9 = verifyNot checkTr "a-z n-za-m"
 prop_checkTr10 = verifyNot checkTr "tr --squeeze-repeats rl lr"
 prop_checkTr11 = verifyNot checkTr "tr abc '[d*]'"
 prop_checkTr12 = verifyNot checkTr "tr '[=e=]' 'e'"
+prop_checkTrIrixBracketedRanges = verifyNot checkTr "# shellcheck shell=irix-sh\ntr '[a-z]' '[A-Z]'"
 checkTr = CommandCheck (Basename "tr") (mapM_ f . arguments)
   where
     f w | isGlob w = -- The user will go [ab] -> '[ab]' -> 'ab'. Fixme?
@@ -249,8 +261,13 @@ checkTr = CommandCheck (Basename "tr") (mapM_ f . arguments)
             info (getId word) 2020 "tr replaces sets of chars, not words (mentioned due to duplicates)."
           unless ("[:" `isPrefixOf` s || "[=" `isPrefixOf` s) $
             when ("[" `isPrefixOf` s && "]" `isSuffixOf` s && (length s > 2) && ('*' `notElem` s)) $
-              info (getId word) 2021 "Don't use [] around classes in tr, it replaces literal square brackets."
+              -- IRIX tr explicitly treats bracketed ranges as ranges.
+              whenNotIrix $ info (getId word) 2021 "Don't use [] around classes in tr, it replaces literal square brackets."
         Nothing -> return ()
+
+    whenNotIrix action = do
+        params <- ask
+        unless (shellType params == IrixSh) action
 
     duplicated s =
         let relevant = filter isAlpha s
@@ -283,10 +300,17 @@ prop_checkExpr11 = verify checkExpr "# shellcheck disable=SC2003\nexpr foo > bar
 prop_checkExpr12 = verify checkExpr "# shellcheck disable=SC2003\nexpr 1 | 2"
 prop_checkExpr13 = verify checkExpr "# shellcheck disable=SC2003\nexpr 1 * 2"
 prop_checkExpr14 = verify checkExpr "# shellcheck disable=SC2003\nexpr \"$x\" >=  \"$y\""
+prop_checkExprIrix = verifyNot checkExpr "# shellcheck shell=irix-sh\nfoo=`expr 3 + 2`"
+prop_checkExprIrixIndex = verifyMessage checkExpr 2308
+    "'expr index' has unspecified results. Prefer x=${var%%[chars]*}; expr ${#x} + 1."
+    "# shellcheck shell=irix-sh\nexpr index \"$var\" abc"
 
 checkExpr = CommandCheck (Basename "expr") f where
     f t = do
-        when (all (`notElem` exceptions) (words $ arguments t)) $
+        params <- ask
+        -- IRIX sh lacks arithmetic expansion and modern command substitution,
+        -- so expr remains necessary when a computed value must be substituted.
+        when (shellType params /= IrixSh && all (`notElem` exceptions) (words $ arguments t)) $
             style (getId $ getCommandTokenOrThis t) 2003
                 "expr is antiquated. Consider rewriting this using $((..)), ${} or [[ ]]."
 
@@ -327,12 +351,16 @@ checkExpr = CommandCheck (Basename "expr") f where
         "match", "length", "substr", "index"]
     words = mapMaybe getLiteralString
 
-    checkOp side =
+    checkOp side = do
+        params <- ask
         case getLiteralString side of
             Just "match" -> msg "'expr match' has unspecified results. Prefer 'expr str : regex'."
             Just "length" -> msg "'expr length' has unspecified results. Prefer ${#var}."
             Just "substr" -> msg "'expr substr' has unspecified results. Prefer 'cut' or ${var#???}."
-            Just "index" -> msg "'expr index' has unspecified results. Prefer x=${var%%[chars]*}; $((${#x}+1))."
+            Just "index" -> msg $
+                if shellType params == IrixSh
+                then "'expr index' has unspecified results. Prefer x=${var%%[chars]*}; expr ${#x} + 1."
+                else "'expr index' has unspecified results. Prefer x=${var%%[chars]*}; $((${#x}+1))."
             _ -> return ()
       where
         msg = info (getId side) 2308
@@ -799,9 +827,15 @@ prop_checkUuoeCmd3 = verify checkUuoeCmd "echo \"$(date)\""
 prop_checkUuoeCmd4 = verify checkUuoeCmd "echo \"`date`\""
 prop_checkUuoeCmd5 = verifyNot checkUuoeCmd "echo \"The time is $(date)\""
 prop_checkUuoeCmd6 = verifyNot checkUuoeCmd "echo \"$(<file)\""
+prop_checkUuoeCmdIrixMessage = verifyMessage checkUuoeCmd 2005
+    "Useless echo? Instead of 'echo `cmd`', just use 'cmd'."
+    "# shellcheck shell=irix-sh\necho `date`"
 checkUuoeCmd = CommandCheck (Exactly "echo") (f . arguments) where
-    msg id = style id 2005 "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'."
-    f [token] = when (tokenIsJustCommandOutput token) $ msg (getId token)
+    f [token] = when (tokenIsJustCommandOutput token) $ do
+        params <- ask
+        let substitution = if shellType params == IrixSh then "`cmd`" else "$(cmd)"
+        style (getId token) 2005 $
+            "Useless echo? Instead of 'echo " ++ substitution ++ "', just use 'cmd'."
     f _ = return ()
 
 
@@ -1017,12 +1051,22 @@ checkDeprecatedTempfile = CommandCheck (Basename "tempfile") $
     \t -> warn (getId $ getCommandTokenOrThis t) 2186 "tempfile is deprecated. Use mktemp instead."
 
 prop_checkDeprecatedEgrep = verify checkDeprecatedEgrep "egrep '.+'"
+prop_checkDeprecatedEgrepIrix = verifyNot checkDeprecatedEgrep "# shellcheck shell=irix-sh\negrep '.+'"
 checkDeprecatedEgrep = CommandCheck (Basename "egrep") $
-    \t -> info (getId $ getCommandTokenOrThis t) 2196 "egrep is non-standard and deprecated. Use grep -E instead."
+    \t -> do
+        params <- ask
+        -- IRIX ships egrep as a native utility rather than a deprecated alias.
+        unless (shellType params == IrixSh) $
+            info (getId $ getCommandTokenOrThis t) 2196 "egrep is non-standard and deprecated. Use grep -E instead."
 
 prop_checkDeprecatedFgrep = verify checkDeprecatedFgrep "fgrep '*' files"
+prop_checkDeprecatedFgrepIrix = verifyNot checkDeprecatedFgrep "# shellcheck shell=irix-sh\nfgrep '*' files"
 checkDeprecatedFgrep = CommandCheck (Basename "fgrep") $
-    \t -> info (getId $ getCommandTokenOrThis t) 2197 "fgrep is non-standard and deprecated. Use grep -F instead."
+    \t -> do
+        params <- ask
+        -- IRIX ships fgrep as a native utility rather than a deprecated alias.
+        unless (shellType params == IrixSh) $
+            info (getId $ getCommandTokenOrThis t) 2197 "fgrep is non-standard and deprecated. Use grep -F instead."
 
 prop_checkWhileGetoptsCase1 = verify checkWhileGetoptsCase "while getopts 'a:b' x; do case $x in a) foo;; esac; done"
 prop_checkWhileGetoptsCase2 = verify checkWhileGetoptsCase "while getopts 'a:' x; do case $x in a) foo;; b) bar;; esac; done"
@@ -1170,6 +1214,7 @@ checkCatastrophicRm = CommandCheck (Basename "rm") $ \t ->
 
 prop_checkLetUsage1 = verify checkLetUsage "let a=1"
 prop_checkLetUsage2 = verifyNot checkLetUsage "(( a=1 ))"
+prop_checkLetUsageIrix = verifyNot checkLetUsage "# shellcheck shell=irix-sh\nlet a=1"
 checkLetUsage = CommandCheck (Exactly "let") f
   where
     f t = whenShell [Bash,Ksh] $ do
@@ -1334,12 +1379,17 @@ prop_checkXargsDashi2 = verifyNot checkXargsDashi "xargs -I{} echo {}"
 prop_checkXargsDashi3 = verifyNot checkXargsDashi "xargs sed -i -e foo"
 prop_checkXargsDashi4 = verify checkXargsDashi "xargs -e sed -i foo"
 prop_checkXargsDashi5 = verifyNot checkXargsDashi "xargs -x sed -i foo"
+prop_checkXargsDashiIrix = verifyNot checkXargsDashi "# shellcheck shell=irix-sh\nxargs -i echo {}"
 checkXargsDashi = CommandCheck (Basename "xargs") f
   where
     f t = sequence_ $ do
         opts <- parseOpts $ arguments t
         (option, value) <- lookup "i" opts
-        return $ info (getId option) 2267 "GNU xargs -i is deprecated in favor of -I{}"
+        return $ do
+            params <- ask
+            -- IRIX xargs documents -i as a supported native option.
+            unless (shellType params == IrixSh) $
+                info (getId option) 2267 "GNU xargs -i is deprecated in favor of -I{}"
     parseOpts = getBsdOpts "0oprtxadR:S:J:L:l:n:P:s:e:E:i:I:"
 
 

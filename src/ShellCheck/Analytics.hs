@@ -648,10 +648,12 @@ prop_checkPipePitfalls20 = verifyNot checkPipePitfalls "foo | grep -B999 bar | w
 prop_checkPipePitfalls21 = verifyNot checkPipePitfalls "foo | grep --after-context 999 bar | wc -l"
 prop_checkPipePitfalls22 = verifyNot checkPipePitfalls "foo | grep -B 1 --after-context 999 bar | wc -l"
 prop_checkPipePitfalls23 = verifyNot checkPipePitfalls "ps -o pid,args -p $(pgrep java) | grep -F net.shellcheck.Test"
+prop_checkPipePitfallsPsGrep = verify checkPipePitfalls "ps -ef | grep cron"
+prop_checkPipePitfallsIrixPsGrep = verifyNot checkPipePitfalls "# shellcheck shell=irix-sh\nps -ef | grep cron"
 prop_checkPipePitfalls3149 = verifyMessage checkPipePitfalls 2038
     "Use NUL delimiters end-to-end (e.g. 'find .. -print0 | xargs -0 ..') to handle arbitrary filenames safely."
     "find . -exec grep -Fl needle {} + | xargs -rn 1 dirname"
-checkPipePitfalls _ (T_Pipeline id _ commands) = do
+checkPipePitfalls params (T_Pipeline id _ commands) = do
     for ["find", "xargs"] $
         \(find:xargs:_) ->
           let args = oversimplify xargs ++ oversimplify find
@@ -671,7 +673,8 @@ checkPipePitfalls _ (T_Pipeline id _ commands) = do
             in
                 -- There are many ways to specify a pid: 1, -1, p 1, wup 1, -q 1, -p 1, --pid 1.
                 -- For simplicity we only deal with the most canonical looking flags:
-                unless (any (`elem` ["p", "pid", "q", "quick-pid"]) psFlags) $
+                -- IRIX does not provide pgrep, so it cannot be a replacement there.
+                unless (shellType params == IrixSh || any (`elem` ["p", "pid", "q", "quick-pid"]) psFlags) $
                     info (getId ps) 2009 "Consider using pgrep instead of grepping ps output."
 
     for ["grep", "wc"] $
@@ -4874,7 +4877,12 @@ prop_checkComparisonWithLeadingX4 = verifyNot checkComparisonWithLeadingX "test 
 prop_checkComparisonWithLeadingX5 = verify checkComparisonWithLeadingX "[ \"x$foo\" = 'xlol' ]"
 prop_checkComparisonWithLeadingX6 = verify checkComparisonWithLeadingX "[ x\"$foo\" = x'lol' ]"
 prop_checkComparisonWithLeadingX7 = verify checkComparisonWithLeadingX "[ X$foo != Xbar ]"
-checkComparisonWithLeadingX params t =
+prop_checkComparisonWithLeadingXIrix = verifyNot checkComparisonWithLeadingX "# shellcheck shell=irix-sh\n[ x\"$foo\" = xbar ]"
+checkComparisonWithLeadingX params t
+  -- The prefix protects IRIX test from values such as "!" and "(" that it
+  -- otherwise interprets as operators rather than string operands.
+  | shellType params == IrixSh = return ()
+  | otherwise =
     case t of
         TC_Binary id typ op lhs rhs
             | op `elem` ["=", "==", "!="] ->
