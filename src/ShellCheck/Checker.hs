@@ -395,6 +395,7 @@ prop_irixKshOmitsInapplicablePlatformAdvice =
         [ (2001, "value=$(echo \"$value\" | sed 's/a/b/g')")
         , (2009, "ps -ef | grep cron")
         , (2021, "tr '[a-z]' '[A-Z]'")
+        , (2028, "echo '\\n'")
         , (2196, "egrep pattern file")
         , (2197, "fgrep pattern file")
         , (2219, "let value=value+1")

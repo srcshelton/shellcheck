@@ -548,11 +548,15 @@ prop_checkUnusedEchoEscapes9 = verifyNot checkUnusedEchoEscapes "echo '\\d5a'"
 prop_checkUnusedEchoEscapes10 = verify checkUnusedEchoEscapes "echo '\\x4a'"
 prop_checkUnusedEchoEscapes11 = verify checkUnusedEchoEscapes "echo '\\xat'"
 prop_checkUnusedEchoEscapes12 = verifyNot checkUnusedEchoEscapes "echo '\\xth'"
+prop_checkUnusedEchoEscapesIrixKsh = verifyNot checkUnusedEchoEscapes
+    "# shellcheck shell=irix-ksh\necho '\\n'"
 checkUnusedEchoEscapes = CommandCheck (Basename "echo") f
   where
     hasEscapes = mkRegex "\\\\([rntabefv\\']|[0-7]{1,3}|x([0-9]|[A-F]|[a-f]){1,2})"
     f cmd =
-        whenShell [Sh, Bash, Ksh, IrixKsh] $
+        -- IRIX echo has defined backslash-escape behavior in both sh and ksh
+        -- modes, so the portability warning does not apply to either dialect.
+        whenShell [Sh, Bash, Ksh] $
             unless (cmd `hasFlag` "e") $
                 mapM_ examine $ arguments cmd
 
