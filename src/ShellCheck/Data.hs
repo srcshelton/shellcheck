@@ -171,6 +171,7 @@ shellForExecutable name =
         "ksh93" -> return Ksh
         "oksh"  -> return Ksh
         "irix-sh" -> return IrixSh
+        "irix-ksh" -> return IrixKsh
         _ -> Nothing
 
 shellName :: Shell -> String
@@ -182,11 +183,21 @@ shellName shell =
         Ksh -> "ksh"
         BusyboxSh -> "busybox"
         IrixSh -> "irix-sh"
+        IrixKsh -> "irix-ksh"
+
+isIrixPlatformShell IrixSh = True
+isIrixPlatformShell IrixKsh = True
+isIrixPlatformShell _ = False
+
+isKshShell Ksh = True
+isKshShell IrixKsh = True
+isKshShell _ = False
 
 flagsForRead = "sreu:n:N:i:p:a:t:"
 
 -- IRIX sh uses -p to read from the coprocess, without an option argument.
 flagsForReadFor IrixSh = "sreu:n:N:i:pa:t:"
+flagsForReadFor IrixKsh = "sreu:n:N:i:pa:t:"
 flagsForReadFor _ = flagsForRead
 
 flagsForMapfile = "d:n:O:s:u:C:c:t"

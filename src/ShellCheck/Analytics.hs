@@ -674,7 +674,7 @@ checkPipePitfalls params (T_Pipeline id _ commands) = do
                 -- There are many ways to specify a pid: 1, -1, p 1, wup 1, -q 1, -p 1, --pid 1.
                 -- For simplicity we only deal with the most canonical looking flags:
                 -- IRIX does not provide pgrep, so it cannot be a replacement there.
-                unless (shellType params == IrixSh || any (`elem` ["p", "pid", "q", "quick-pid"]) psFlags) $
+                unless (isIrixPlatformShell (shellType params) || any (`elem` ["p", "pid", "q", "quick-pid"]) psFlags) $
                     info (getId ps) 2009 "Consider using pgrep instead of grepping ps output."
 
     for ["grep", "wc"] $
@@ -1416,7 +1416,7 @@ checkNumberComparisons _ _ = return ()
 
 prop_checkSingleBracketOperators1 = verify checkSingleBracketOperators "[ test =~ foo ]"
 checkSingleBracketOperators params (TC_Binary id SingleBracket "=~" lhs rhs)
-    | shellType params `elem` [Bash, Ksh] =
+    | shellType params `elem` [Bash, Ksh, IrixKsh] =
         err id 2074 $ "Can't use =~ in [ ]. Use [[..]] instead."
 checkSingleBracketOperators _ _ = return ()
 
@@ -1520,7 +1520,7 @@ checkConstantIfs params (TC_Binary id typ op lhs rhs) | not isDynamic =
 checkConstantIfs _ _ = return ()
 
 isIrixIntegerVariable params token =
-    shellType params == IrixSh && fromMaybe False (do
+    shellType params `elem` [IrixSh, IrixKsh] && fromMaybe False (do
         name <- getLiteralString token
         guard $ isVariableName name
         cfga <- cfgAnalysis params
@@ -1657,7 +1657,7 @@ checkComparisonAgainstGlob params (TC_Binary _ SingleBracket op _ word)
         | op `elem` ["=", "==", "!="] && isGlob word =
     err (getId word) 2081 msg
   where
-    msg = if (shellType params) `elem` [Bash, Ksh]  -- Busybox does not support glob matching
+    msg = if (shellType params) `elem` [Bash, Ksh, IrixKsh]  -- Busybox does not support glob matching
             then "[ .. ] can't match globs. Use [[ .. ]] or case statement."
             else "[ .. ] can't match globs. Use a case statement."
 
@@ -3331,6 +3331,9 @@ checkFunctionDeclarations params
         Ksh ->
             when (hasKeyword && hasParens) $
                 err id 2111 "ksh does not allow 'function' keyword and '()' at the same time."
+        IrixKsh ->
+            when (hasKeyword && hasParens) $
+                err id 2111 "IRIX ksh does not allow 'function' keyword and '()' at the same time."
         IrixSh ->
             when (hasKeyword && hasParens) $
                 err id 2111 "IRIX sh does not allow 'function' keyword and '()' at the same time."
@@ -3354,6 +3357,7 @@ prop_checkStderrPipeIrix = verify checkStderrPipe "# shellcheck shell=irix-sh\nf
 checkStderrPipe params =
     case shellType params of
         Ksh -> match
+        IrixKsh -> matchIrix
         IrixSh -> matchIrix
         _ -> const $ return ()
   where
@@ -3516,7 +3520,7 @@ checkUnsupported params t =
     (name, support) = shellSupport t
     report s = err (getId t) 2127 $
         "To use " ++ s ++ ", specify #!/usr/bin/env " ++
-            (intercalate " or " . map (map toLower . show) $ support)
+            (intercalate " or " . map shellName $ support)
 
 -- TODO: Move more of these checks here
 shellSupport t =
@@ -3645,7 +3649,7 @@ checkTestArgumentSplitting params t =
                     err (getId token) 2208 $
                       "Use [[ ]] or quote arguments to -v to avoid glob expansion."
             else
-                if (typ == SingleBracket && shellType params == Ksh)
+                if (typ == SingleBracket && isKshShell (shellType params))
                 then
                     -- Ksh appears to stop processing after unrecognized tokens, so operators
                     -- will effectively work with globs, but only the first match.
@@ -3710,7 +3714,7 @@ checkTestArgumentSplitting params t =
 
     checkNumericalGlob SingleBracket token =
         -- var[x] and x*2 look like globs
-        when (shellType params `notElem` [Ksh, IrixSh] && isGlob token) $
+        when (shellType params `notElem` [Ksh, IrixSh, IrixKsh] && isGlob token) $
             err (getId token) 2255 "[ ] does not apply arithmetic evaluation. Evaluate with $((..)) for numbers, or use string comparator for strings."
 
 
@@ -3736,7 +3740,7 @@ prop_checkCpLegacyR1 = verify checkCpLegacyR "cp -r foo bar"
 prop_checkCpLegacyR2 = verifyNot checkCpLegacyR "cp -R foo bar"
 prop_checkCpLegacyR3 = verifyNot checkCpLegacyR "# shellcheck shell=irix-sh\ncp -r foo bar"
 checkCpLegacyR params t@T_SimpleCommand {} | t `isUnqualifiedCommand` "cp"
-    && shellType params /= IrixSh = case legacyFlag of
+    && not (isIrixPlatformShell $ shellType params) = case legacyFlag of
   Just (t, _) -> warnWithFix (getId t) 2336 "cp -r behavior is implementation-defined"
                      (fixWith [replaceToken (getId t) params "-R"])
   Nothing -> return ()
@@ -4136,14 +4140,14 @@ checkSplittingInArrays params t =
             && not (isQuotedAlternativeReference part)
             && getBracedReference (concat $ oversimplify str) `notElem` variablesWithoutSpaces
             -> warn id 2206 $
-                if shellType params `elem` [Ksh, IrixSh]
+                if shellType params `elem` [Ksh, IrixSh, IrixKsh]
                 then "Quote to prevent word splitting/globbing, or split robustly with read -A or while read."
                 else "Quote to prevent word splitting/globbing, or split robustly with mapfile or read -a."
         _ -> return ()
 
     forCommand id =
         warn id 2207 $
-            if shellType params `elem` [Ksh, IrixSh]
+            if shellType params `elem` [Ksh, IrixSh, IrixKsh]
             then "Prefer read -A or while read to split command output (or quote to avoid splitting)."
             else "Prefer mapfile or read -a to split command output (or quote to avoid splitting)."
 
@@ -5007,6 +5011,7 @@ checkEqualsInCommand params originalToken =
         case shellType params of
             Bash -> errWithFix id 2277 "Use BASH_ARGV0 to assign to $0 in bash (or use [ ] to compare)." bashfix
             Ksh -> err id 2278 "$0 can't be assigned in Ksh (but it does reflect the current function)."
+            IrixKsh -> err id 2278 "$0 can't be assigned in IRIX ksh (but it does reflect the current function)."
             IrixSh -> err id 2278 "$0 can't be assigned in IRIX sh (but it does reflect the current function)."
             Dash -> err id 2279 "$0 can't be assigned in Dash. This becomes a command name."
             BusyboxSh -> err id 2279 "$0 can't be assigned in Busybox Ash. This becomes a command name."
@@ -5194,8 +5199,10 @@ prop_checkRequireDoubleBracket3 = verifyNotTree checkRequireDoubleBracket "#!/bi
 prop_checkRequireDoubleBracket4 = verifyNotTree checkRequireDoubleBracket "[[ -x foo ]]"
 prop_checkRequireDoubleBracket5 = appliesFix "[[ -n foo ]]" "[ -n foo ]"
 prop_checkRequireDoubleBracket6 = appliesFix "[[ -n foo ]]" "[ -n foo ]]"
+prop_checkRequireDoubleBracketIrixKsh = verifyTree checkRequireDoubleBracket
+    "# shellcheck shell=irix-ksh\n[ -n foo ]"
 checkRequireDoubleBracket params =
-    if (shellType params) `elem` [Bash, Ksh, BusyboxSh]
+    if (shellType params) `elem` [Bash, Ksh, IrixKsh, BusyboxSh]
     then nodeChecksToTreeCheck [check] params
     else const []
   where
@@ -5645,7 +5652,7 @@ prop_checkStatusAfterCommandSubstitution5 = verifyNot checkStatusAfterCommandSub
 prop_checkStatusAfterCommandSubstitution6 = verifyNot checkStatusAfterCommandSubstitution "#!/bin/bash\nfalse; echo \"$(printf '%s' \"$?\")\""
 prop_checkStatusAfterCommandSubstitution7 = verifyNot checkStatusAfterCommandSubstitution "#!/bin/bash\nfalse; status=$?; echo \"$(true)\" \"$status\""
 checkStatusAfterCommandSubstitution params (T_SimpleCommand _ _ words@(_:_)) =
-    when (shellType params `elem` [Bash, Ksh]) $ checkEvents False $ concatMap events words
+    when (shellType params `elem` [Bash, Ksh, IrixKsh]) $ checkEvents False $ concatMap events words
   where
     checkEvents _ [] = return ()
     checkEvents _ (Left _:rest) = checkEvents True rest

@@ -277,6 +277,15 @@ checkIrix src =
             csShellTypeOverride = Just IrixSh
         }
 
+checkIrixKsh src =
+    getErrors
+        (mockedSystemInterface [])
+        emptyCheckSpec {
+            csScript = src,
+            csExcludedWarnings = [2148],
+            csShellTypeOverride = Just IrixKsh
+        }
+
 prop_irixAcceptsBraceCase =
     null $ intersect [1072, 1073] $ checkIrix "case value {\nvalue) echo yes;;\n}"
 prop_irixAcceptsTrailingCoprocess =
@@ -358,6 +367,58 @@ prop_irixWorkaroundsBecomeUnused =
     [2337, 2337] == result
   where
     result = check "# shellcheck shell=irix-sh enable=check-unused-suppressions\n# shellcheck disable=SC1072,SC1073\ncase \"$1\" {\nvalue) true;;\n}"
+
+prop_irixKshDirectiveSelectsDialect =
+    3060 `elem` check "# shellcheck shell=irix-ksh\nvalue=abc\necho \"${value//a/b}\""
+prop_irixKshAcceptsSupportedLanguage =
+    null $ filter isLanguageError result
+  where
+    result = checkIrixKsh $ unlines
+        [ "value=$(echo value)"
+        , "number=$((1 + 1))"
+        , "length=${#value}"
+        , "(( number = number + 1 ))"
+        , "let number=number+1"
+        , "[[ -n $value ]]"
+        , "read -r value"
+        ]
+    isLanguageError code = code >= 3000 && code < 4000
+prop_irixKshRejectsStringReplacement =
+    3060 `elem` checkIrixKsh "value=abc\necho \"${value//a/b}\""
+prop_irixKshOmitsInapplicablePlatformAdvice =
+    conjoin $ map checkCase cases
+  where
+    checkCase (code, source) =
+        counterexample ("Unexpected SC" ++ show code ++ " for: " ++ source) $
+            code `notElem` checkIrixKsh source
+    cases =
+        [ (2001, "value=$(echo \"$value\" | sed 's/a/b/g')")
+        , (2009, "ps -ef | grep cron")
+        , (2021, "tr '[a-z]' '[A-Z]'")
+        , (2196, "egrep pattern file")
+        , (2197, "fgrep pattern file")
+        , (2219, "let value=value+1")
+        , (2267, "xargs -i echo {}")
+        , (2336, "cp -r source destination")
+        ]
+prop_irixKshRetainsApplicableDiagnostics =
+    conjoin $ map checkCase cases
+  where
+    checkCase (code, source) =
+        counterexample ("Expected SC" ++ show code ++ " for: " ++ source) $
+            code `elem` checkIrixKsh source
+    cases =
+        [ (2003, "value=$(expr 3 + 2)")
+        , (2050, "[ constant = constant ]")
+        , (2086, "echo $value")
+        , (2162, "read value")
+        , (2268, "[ x\"$value\" = x ]")
+        , (3060, "echo \"${value//a/b}\"")
+        ]
+prop_irixKshAcceptsIrixCoprocess =
+    2118 `notElem` checkIrixKsh "print value |&\nread -p result"
+prop_irixKshRejectsStderrPipeInterpretation =
+    2118 `elem` checkIrixKsh "print value |& sed 's/value/result/'"
 
 checkShVariant variant src =
     getErrors

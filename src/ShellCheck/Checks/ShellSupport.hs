@@ -255,7 +255,11 @@ prop_checkBashisms147 = verify checkBashisms "[ -R ref ]" -- SC3063
 prop_checkBashisms148 = verify checkBashisms "[ -N file ]" -- SC3064
 prop_checkBashisms149 = verify checkBashisms "[ -G file ]" -- SC3066
 prop_checkBashisms150 = verify checkBashisms "[ -O file ]" -- SC3067
-checkBashisms = ForShell [Sh, Dash, BusyboxSh] $ \t -> do
+prop_checkBashismsIrixKshReplacement = verify checkBashisms
+    "# shellcheck shell=irix-ksh\nx=value\necho \"${x//a/b}\""
+prop_checkBashismsIrixKshSupported = verifyNot checkBashisms
+    "# shellcheck shell=irix-ksh\nx=$(echo value)\necho \"$((1 + 1)) ${#x}\"\n(( x = 1 ))\nlet x=x+1\n[[ -n $x ]]\nread -r x"
+checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixKsh] $ \t -> do
     params <- ask
     kludge params t
  where
@@ -264,12 +268,16 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh] $ \t -> do
    where
     isBusyboxSh = shellType params == BusyboxSh
     isDash = shellType params == Dash || isBusyboxSh
+    isIrixKsh = shellType params == IrixKsh
     warnMsg id code s =
-        if isDash
+        if isIrixKsh
+        then err id code $ "In IRIX ksh, " ++ s ++ " not supported."
+        else if isDash
         then err  id code $ "In dash, " ++ s ++ " not supported."
         else warn id code $ "In POSIX sh, " ++ s ++ " undefined."
     asStr = getLiteralString
 
+    bashism t | isIrixKsh = irixKshism t
     bashism (T_ProcSub id _ _) = warnMsg id 3001 "process substitution is"
     bashism (T_Extglob id _ _) = warnMsg id 3002 "extglob is"
     bashism (T_DollarDoubleQuoted id _) = warnMsg id 3004 "$\"..\" is"
@@ -495,6 +503,14 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh] $ \t -> do
       where
         radix = mkRegex "^[0-9]+#"
     bashism _ = return ()
+
+    irixKshism (T_DollarBraced id _ token) =
+        mapM_ check $ filter (\(_, code, _) -> code == 3060) simpleExpansions
+      where
+        str = concat $ oversimplify token
+        check (regex, code, feature) =
+            when (isJust $ matchRegex regex str) $ warnMsg id code feature
+    irixKshism _ = return ()
 
     varChars="_0-9a-zA-Z"
     advancedExpansions = let re = mkRegex in [

@@ -28,7 +28,7 @@ module ShellCheck.Interface
     , AnalysisSpec(asScript, asShellType, asFallbackShell, asExecutionMode, asCheckSourced, asTokenPositions, asExtendedAnalysis, asOptionalChecks, asUsedDisableDirectives)
     , AnalysisResult(arComments)
     , FormatterOptions(foColorOption, foWikiLinkCount)
-    , Shell(Ksh, Sh, Bash, Dash, BusyboxSh, IrixSh)
+    , Shell(Ksh, Sh, Bash, Dash, BusyboxSh, IrixSh, IrixKsh)
     , ExecutionMode(Executed, Sourced)
     , ErrorMessage
     , Code
@@ -233,7 +233,7 @@ newCheckDescription = CheckDescription {
     }
 
 -- Supporting data types
-data Shell = Ksh | Sh | Bash | Dash | BusyboxSh | IrixSh deriving (Show, Eq)
+data Shell = Ksh | Sh | Bash | Dash | BusyboxSh | IrixSh | IrixKsh deriving (Show, Eq)
 data ExecutionMode = Executed | Sourced deriving (Show, Eq)
 
 type ErrorMessage = String

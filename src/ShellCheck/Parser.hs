@@ -317,7 +317,7 @@ getCurrentAnnotations includeSource =
     isBoundary (ContextSource _) = not includeSource
     isBoundary _ = False
 
-isIrixShell = do
+getAnnotatedShell = do
     flagShell <- Mr.asks shellTypeOverride
     annotations <- getCurrentAnnotations False
     let annotatedShell = listToMaybe $ do
@@ -327,7 +327,11 @@ isIrixShell = do
                 ShVariantOverride value -> [value]
                 _ -> []
             maybeToList $ shellForExecutable name
-    return $ (flagShell `mplus` annotatedShell) == Just IrixSh
+    return $ flagShell `mplus` annotatedShell
+
+isIrixShell = (== Just IrixSh) <$> getAnnotatedShell
+
+isIrixDialect = maybe False isIrixPlatformShell <$> getAnnotatedShell
 
 
 shouldFollow file = do
@@ -744,7 +748,7 @@ readConditionContents single =
         return $ TC_Unary id typ "!" expr
 
     readCondDynamicUnaryExp = try $ do
-        irix <- isIrixShell
+        irix <- isIrixDialect
         guard $ irix && single
         start <- startSpan
         op <- readCondWord
@@ -1865,7 +1869,7 @@ readDollarVariable quoted = do
     isIrixQuotedRegexClass
         | not quoted = return False
         | otherwise = do
-            irix <- isIrixShell
+            irix <- isIrixDialect
             if irix
             then isFollowedBy whitespaceRegexClass
             else return False
@@ -2488,7 +2492,7 @@ readTerm = do
 readPipeSequence = try readIrixCoprocess <|> readRegularPipeSequence
 
 readIrixCoprocess = do
-    irix <- isIrixShell
+    irix <- isIrixDialect
     guard irix
     start <- startSpan
     (cmds, pipes) <- sepBy1WithSeparators (readBanged readCommand) readOrdinaryPipe
@@ -2639,7 +2643,7 @@ readElifPart = called "elif clause" $ do
 readElsePart = called "else clause" $ do
     pos <- getPosition
     g_Else
-    irix <- isIrixShell
+    irix <- isIrixDialect
     unless irix $
         optional $ do
             try . lookAhead $ g_If
@@ -2858,7 +2862,7 @@ readCaseClause = called "case expression" $ do
     g_Case
     word <- readNormalWord
     allspacing
-    irix <- isIrixShell
+    irix <- isIrixDialect
     list <- if irix
             then try readIrixCase <|> readRegularCase
             else readRegularCase
@@ -3492,6 +3496,7 @@ prop_readScript4 = isWarning readScript "#!/usr/bin/perl\nfoo=("
 prop_readScript5 = isOk readScript "#!/bin/bash\n#This is an empty script\n\n"
 prop_readScript6 = isOk readScript "#!/usr/bin/env -S X=FOO bash\n#This is an empty script\n\n"
 prop_readScript7 = isOk readScript "#!/bin/zsh\n# shellcheck disable=SC1071\nfor f (a b); echo $f\n"
+prop_readScriptIrixKsh = isOk readScript "#!/sbin/env irix-ksh\nvalue=$(echo value)\n"
 readScriptFile sourced = do
     start <- startSpan
     pos <- getPosition
@@ -3557,8 +3562,8 @@ readScriptFile sourced = do
     verifyShebang pos s = do
         case isValidShell s of
             Just True -> return ()
-            Just False -> parseProblemAt pos ErrorC 1071 "ShellCheck only supports sh/bash/dash/ksh/'busybox sh'/irix-sh scripts. Sorry!"
-            Nothing -> parseProblemAt pos ErrorC 1008 "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'/irix-sh. Add a 'shell' directive to specify."
+            Just False -> parseProblemAt pos ErrorC 1071 "ShellCheck only supports sh/bash/dash/ksh/'busybox sh'/irix-sh/irix-ksh scripts. Sorry!"
+            Nothing -> parseProblemAt pos ErrorC 1008 "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'/irix-sh/irix-ksh. Add a 'shell' directive to specify."
 
     isValidShell s =
         let good = null s || any (`isPrefixOf` s) goodShells
@@ -3579,7 +3584,8 @@ readScriptFile sourced = do
         "bats",
         "ksh",
         "oksh",
-        "irix-sh"
+        "irix-sh",
+        "irix-ksh"
         ]
     badShells = [
         "awk",

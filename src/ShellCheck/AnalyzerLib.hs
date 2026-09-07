@@ -217,7 +217,8 @@ makeParameters spec = params
                 BusyboxSh -> False
                 Sh   -> False
                 Ksh  -> True
-                IrixSh -> True,
+                IrixSh -> True
+                IrixKsh -> True,
         hasInheritErrexit =
             case shellType params of
                 Bash -> isOptionSet "inherit_errexit" root
@@ -225,7 +226,8 @@ makeParameters spec = params
                 BusyboxSh -> True
                 Sh   -> True
                 Ksh  -> False
-                IrixSh -> False,
+                IrixSh -> False
+                IrixKsh -> False,
         hasPipefail =
             case shellType params of
                 Bash -> isOptionSet "pipefail" root
@@ -233,7 +235,8 @@ makeParameters spec = params
                 BusyboxSh -> isOptionSet "pipefail" root
                 Sh -> isOptionSet "pipefail" root
                 Ksh  -> isOptionSet "pipefail" root
-                IrixSh -> isOptionSet "pipefail" root,
+                IrixSh -> isOptionSet "pipefail" root
+                IrixKsh -> isOptionSet "pipefail" root,
         hasExecfail =
             case shellType params of
                 Bash -> isOptionSet "execfail" root
@@ -319,6 +322,8 @@ prop_determineShell10 = determineShellTest "#!/bin/env --split-string= dash -x" 
 prop_determineShell11 = determineShellTest "#!/bin/busybox sh" == BusyboxSh -- busybox sh is a specific shell, not posix sh
 prop_determineShell12 = determineShellTest "#!/bin/busybox ash" == BusyboxSh
 prop_determineShell13 = determineShellTest "# shellcheck shell=irix-sh\ntrue" == IrixSh
+prop_determineShell14 = determineShellTest "# shellcheck shell=irix-ksh\ntrue" == IrixKsh
+prop_determineShell15 = determineShellTest "#!/sbin/env irix-ksh\ntrue" == IrixKsh
 
 determineShellTest = determineShellTest' Nothing
 determineShellTest' fallbackShell = determineShell fallbackShell . fromJust . prRoot . pScript
@@ -730,7 +735,7 @@ getModifiedVariableCommand params base@(T_SimpleCommand id cmdPrefix (T_NormalWo
             then []
             else concatMap getModifierParamString rest
         "set" ->
-            if shellType params == IrixSh
+            if isIrixPlatformShell (shellType params)
             then case getIrixArray rest of
                     Just array -> [array]
                     Nothing -> positionalParameters
@@ -995,6 +1000,7 @@ isQuotedAlternativeReference t =
 supportsArrays Bash = True
 supportsArrays Ksh = True
 supportsArrays IrixSh = True
+supportsArrays IrixKsh = True
 supportsArrays _ = False
 
 isTrueAssignmentSource c =

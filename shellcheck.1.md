@@ -98,17 +98,19 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
 **-s**\ *shell*,\ **--shell=***shell*
 
 :   Specify Bourne shell dialect. Valid values are *sh*, *bash*, *dash*, *ksh*,
-    *busybox*, and *irix-sh*.
+    *busybox*, *irix-sh*, and *irix-ksh*.
     The default is to deduce the shell from the file's `shell` directive,
     shebang, or `.bash/.bats/.dash/.ksh` extension, in that order. *sh* refers to
     POSIX `sh` (not the system's), and will warn of portability issues.
+    *irix-sh* models IRIX `/sbin/sh`; *irix-ksh* models the same IRIX shell
+    executable when invoked in Korn-shell mode.
 
 **--sh-variant=***shell*
 
 :   Treat a generic `sh` shebang as the specified dialect. This affects scripts
     using interpreters such as `/bin/sh`, while explicit `bash`, `dash`, `ksh`,
-    `busybox`, and `irix-sh` shebangs retain their own dialect. An explicit
-    `shell` override takes precedence.
+    `busybox`, `irix-sh`, and `irix-ksh` shebangs retain their own dialect. An
+    explicit `shell` override takes precedence.
 
 **-S**\ *SEVERITY*,\ **--severity=***severity*
 

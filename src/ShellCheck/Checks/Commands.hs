@@ -248,6 +248,7 @@ prop_checkTr10 = verifyNot checkTr "tr --squeeze-repeats rl lr"
 prop_checkTr11 = verifyNot checkTr "tr abc '[d*]'"
 prop_checkTr12 = verifyNot checkTr "tr '[=e=]' 'e'"
 prop_checkTrIrixBracketedRanges = verifyNot checkTr "# shellcheck shell=irix-sh\ntr '[a-z]' '[A-Z]'"
+prop_checkTrIrixKshBracketedRanges = verifyNot checkTr "# shellcheck shell=irix-ksh\ntr '[a-z]' '[A-Z]'"
 checkTr = CommandCheck (Basename "tr") (mapM_ f . arguments)
   where
     f w | isGlob w = -- The user will go [ab] -> '[ab]' -> 'ab'. Fixme?
@@ -267,7 +268,7 @@ checkTr = CommandCheck (Basename "tr") (mapM_ f . arguments)
 
     whenNotIrix action = do
         params <- ask
-        unless (shellType params == IrixSh) action
+        unless (isIrixPlatformShell $ shellType params) action
 
     duplicated s =
         let relevant = filter isAlpha s
@@ -551,7 +552,7 @@ checkUnusedEchoEscapes = CommandCheck (Basename "echo") f
   where
     hasEscapes = mkRegex "\\\\([rntabefv\\']|[0-7]{1,3}|x([0-9]|[A-F]|[a-f]){1,2})"
     f cmd =
-        whenShell [Sh, Bash, Ksh] $
+        whenShell [Sh, Bash, Ksh, IrixKsh] $
             unless (cmd `hasFlag` "e") $
                 mapM_ examine $ arguments cmd
 
@@ -1052,20 +1053,22 @@ checkDeprecatedTempfile = CommandCheck (Basename "tempfile") $
 
 prop_checkDeprecatedEgrep = verify checkDeprecatedEgrep "egrep '.+'"
 prop_checkDeprecatedEgrepIrix = verifyNot checkDeprecatedEgrep "# shellcheck shell=irix-sh\negrep '.+'"
+prop_checkDeprecatedEgrepIrixKsh = verifyNot checkDeprecatedEgrep "# shellcheck shell=irix-ksh\negrep '.+'"
 checkDeprecatedEgrep = CommandCheck (Basename "egrep") $
     \t -> do
         params <- ask
         -- IRIX ships egrep as a native utility rather than a deprecated alias.
-        unless (shellType params == IrixSh) $
+        unless (isIrixPlatformShell $ shellType params) $
             info (getId $ getCommandTokenOrThis t) 2196 "egrep is non-standard and deprecated. Use grep -E instead."
 
 prop_checkDeprecatedFgrep = verify checkDeprecatedFgrep "fgrep '*' files"
 prop_checkDeprecatedFgrepIrix = verifyNot checkDeprecatedFgrep "# shellcheck shell=irix-sh\nfgrep '*' files"
+prop_checkDeprecatedFgrepIrixKsh = verifyNot checkDeprecatedFgrep "# shellcheck shell=irix-ksh\nfgrep '*' files"
 checkDeprecatedFgrep = CommandCheck (Basename "fgrep") $
     \t -> do
         params <- ask
         -- IRIX ships fgrep as a native utility rather than a deprecated alias.
-        unless (shellType params == IrixSh) $
+        unless (isIrixPlatformShell $ shellType params) $
             info (getId $ getCommandTokenOrThis t) 2197 "fgrep is non-standard and deprecated. Use grep -F instead."
 
 prop_checkWhileGetoptsCase1 = verify checkWhileGetoptsCase "while getopts 'a:b' x; do case $x in a) foo;; esac; done"
@@ -1215,6 +1218,7 @@ checkCatastrophicRm = CommandCheck (Basename "rm") $ \t ->
 prop_checkLetUsage1 = verify checkLetUsage "let a=1"
 prop_checkLetUsage2 = verifyNot checkLetUsage "(( a=1 ))"
 prop_checkLetUsageIrix = verifyNot checkLetUsage "# shellcheck shell=irix-sh\nlet a=1"
+prop_checkLetUsageIrixKsh = verifyNot checkLetUsage "# shellcheck shell=irix-ksh\nlet a=1"
 checkLetUsage = CommandCheck (Exactly "let") f
   where
     f t = whenShell [Bash,Ksh] $ do
@@ -1380,6 +1384,7 @@ prop_checkXargsDashi3 = verifyNot checkXargsDashi "xargs sed -i -e foo"
 prop_checkXargsDashi4 = verify checkXargsDashi "xargs -e sed -i foo"
 prop_checkXargsDashi5 = verifyNot checkXargsDashi "xargs -x sed -i foo"
 prop_checkXargsDashiIrix = verifyNot checkXargsDashi "# shellcheck shell=irix-sh\nxargs -i echo {}"
+prop_checkXargsDashiIrixKsh = verifyNot checkXargsDashi "# shellcheck shell=irix-ksh\nxargs -i echo {}"
 checkXargsDashi = CommandCheck (Basename "xargs") f
   where
     f t = sequence_ $ do
@@ -1388,7 +1393,7 @@ checkXargsDashi = CommandCheck (Basename "xargs") f
         return $ do
             params <- ask
             -- IRIX xargs documents -i as a supported native option.
-            unless (shellType params == IrixSh) $
+            unless (isIrixPlatformShell $ shellType params) $
                 info (getId option) 2267 "GNU xargs -i is deprecated in favor of -I{}"
     parseOpts = getBsdOpts "0oprtxadR:S:J:L:l:n:P:s:e:E:i:I:"
 
@@ -1477,7 +1482,7 @@ checkMaskedReturns str = CommandCheck (Exactly str) checkCmd
         case t of
             T_BatsTest {} -> True
             -- In ksh, only functions declared with 'function' have their own scope
-            T_Function _ (FunctionKeyword hasFunction) _ _ _ -> shell /= Ksh || hasFunction
+            T_Function _ (FunctionKeyword hasFunction) _ _ _ -> not (isKshShell shell) || hasFunction
             _ -> False
 
     hasReturn t = case t of

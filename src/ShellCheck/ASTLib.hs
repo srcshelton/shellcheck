@@ -777,6 +777,7 @@ prop_executableFromShebang9 = executableFromShebang "/usr/bin/env foo=bar dash" 
 prop_executableFromShebang10 = executableFromShebang "/bin/busybox sh" == "busybox sh"
 prop_executableFromShebang11 = executableFromShebang "/bin/busybox ash" == "busybox ash"
 prop_executableFromShebang12 = executableFromShebang "/sbin/env irix-sh" == "irix-sh"
+prop_executableFromShebang13 = executableFromShebang "/sbin/env irix-ksh" == "irix-ksh"
 
 -- Get the shell executable from a string like '/usr/bin/env bash'
 executableFromShebang :: String -> String
