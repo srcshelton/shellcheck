@@ -26,5 +26,12 @@ do
     exit 2
   fi
 
-  docker run -i "$(< "$tagfile")" < "$file" | tar xz
+  docker_args=()
+  if [ -e "$dir/use-local-build-script" ]
+  then
+    build_script=$(realpath "$dir/build")
+    docker_args+=(--mount "type=bind,src=$build_script,dst=/usr/bin/build,readonly")
+  fi
+
+  docker run -i "${docker_args[@]}" "$(< "$tagfile")" < "$file" | tar xz
 done

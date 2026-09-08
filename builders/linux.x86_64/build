@@ -4,6 +4,16 @@ set -xe
   tar xzv --strip-components=1
   chmod +x striptests && ./striptests
   mkdir "$TARGETNAME"
+  cabal_config="$PWD/.cabal-release.config"
+  cabal --config-file="$cabal_config" user-config init --force
+  sed -i \
+    -e 's#url: http://hackage.haskell.org/#url: https://hackage.haskell.org/#' \
+    -e 's#^-- http-transport:.*#http-transport: curl#' \
+    "$cabal_config"
+  grep -F 'url: https://hackage.haskell.org/' "$cabal_config"
+  grep -F 'http-transport: curl' "$cabal_config"
+  CABAL_CONFIG="$cabal_config"
+  export CABAL_CONFIG
   cabal update
   ( IFS=';'; cabal build $CABALOPTS --enable-executable-static )
   find . -name shellcheck -type f -exec mv {} "$TARGETNAME/" \;

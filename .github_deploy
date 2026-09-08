@@ -11,9 +11,10 @@ do
   if ! gh release view "$tag" >/dev/null 2>&1
   then
     echo "Creating new release $tag"
-    git show --no-patch  --format='format:%B' > description
+    release_source_ref=${RELEASE_SOURCE_TAG:-${GITHUB_SHA:-HEAD}}
+    git show "$release_source_ref" --no-patch --format='format:%B' > description
     gh release create "$tag" \
-      --target "${GITHUB_SHA:-HEAD}" \
+      --target "$release_source_ref" \
       --title "$tag" \
       --notes-file description
   fi
