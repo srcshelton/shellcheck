@@ -650,6 +650,11 @@ prop_checkPipePitfalls22 = verifyNot checkPipePitfalls "foo | grep -B 1 --after-
 prop_checkPipePitfalls23 = verifyNot checkPipePitfalls "ps -o pid,args -p $(pgrep java) | grep -F net.shellcheck.Test"
 prop_checkPipePitfallsPsGrep = verify checkPipePitfalls "ps -ef | grep cron"
 prop_checkPipePitfallsIrixPsGrep = verifyNot checkPipePitfalls "# shellcheck shell=irix-sh\nps -ef | grep cron"
+prop_checkPipePitfallsSc2012 = verifyCodes checkPipePitfalls [2012] "ls /tmp | sed -n 1p"
+prop_checkPipePitfallsIrixSc2012 = verifyCodes checkPipePitfalls []
+    "# shellcheck shell=irix-sh\nls /tmp | sed -n 1p"
+prop_checkPipePitfallsIrixKshSc2012 = verifyCodes checkPipePitfalls []
+    "# shellcheck shell=irix-ksh\nls /tmp | sed -n 1p"
 prop_checkPipePitfalls3149 = verifyMessage checkPipePitfalls 2038
     "Use NUL delimiters end-to-end (e.g. 'find .. -print0 | xargs -0 ..') to handle arbitrary filenames safely."
     "find . -exec grep -Fl needle {} + | xargs -rn 1 dirname"
@@ -695,7 +700,8 @@ checkPipePitfalls params (T_Pipeline id _ commands) = do
         ]
     unless didLs $ void $
         for ["ls", "?"] $
-            \(ls:_) -> unless (hasShortParameter 'N' (oversimplify ls)) $
+            \(ls:_) -> unless (isIrixPlatformShell (shellType params)
+                    || hasShortParameter 'N' (oversimplify ls)) $
                 info (getId ls) 2012 "Use find instead of ls to better handle non-alphanumeric filenames."
   where
     for l f =
