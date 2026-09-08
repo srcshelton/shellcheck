@@ -1,3 +1,9 @@
+## v0.11.0-irix.5 - 2026-09-08
+### Fixed
+- SC2012 is suppressed for the IRIX shell profiles, where its suggested
+  `find` replacement cannot safely reproduce the affected pipeline.
+
+
 ## v0.11.0-irix.4 - 2026-09-07
 ### Added
 - `irix-ksh` models the Korn shell shipped with IRIX separately from `/sbin/sh`.
