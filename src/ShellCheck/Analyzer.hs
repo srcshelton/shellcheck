@@ -62,7 +62,9 @@ analyzeScript spec = newAnalysisResult {
     stripDisableDirectives = doTransform strip
       where
         strip (T_Annotation id annotations body) =
-            T_Annotation id (filter (not . isDisable) annotations) body
+            case filter (not . isDisable) annotations of
+                [] -> body
+                remaining -> T_Annotation id remaining body
         strip token = token
         isDisable DisableComment {} = True
         isDisable DisableCommentWithId {} = True

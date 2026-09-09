@@ -251,6 +251,15 @@ prop_findsUnusedAnalysisSuppression =
     [2337] == checkUnusedSuppressions "# shellcheck disable=SC2086\necho \"$1\""
 prop_acceptsUsedAnalysisSuppression =
     null $ checkUnusedSuppressions "# shellcheck disable=SC2086\necho $1"
+prop_acceptsUsedUnreachableHereDocSuppression =
+    null $ checkUnusedSuppressions $ unlines
+        [ "#!/bin/sh"
+        , "exit 0"
+        , "# shellcheck disable=SC2317"
+        , ": <<'DATA'"
+        , "help text"
+        , "DATA"
+        ]
 prop_acceptsSuppressionConsultedDuringAnalysis =
     null $ checkUnusedSuppressions "# shellcheck disable=SC2120\nf() { echo \"$1\"; }; f"
 prop_findsUnusedParseSuppression =
