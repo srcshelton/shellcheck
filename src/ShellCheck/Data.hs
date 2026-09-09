@@ -25,7 +25,7 @@ Use:
 -}
 
 import Paths_ShellCheck (version)
-shellcheckVersion = toIrixVersion (showVersion version ++ "-irix.4")  -- VERSIONSTRING
+shellcheckVersion = toIrixVersion (showVersion version ++ "-irix.6")  -- VERSIONSTRING
 
 -- Cabal package versions are numeric, so the fork suffix cannot live in
 -- ShellCheck.cabal.  Release builds replace the argument above with their
@@ -224,6 +224,8 @@ prop_toIrixVersionRelease3 =
     toIrixVersion "v0.11.0-irix.3" == "0.11.0-irix.3"
 prop_toIrixVersionRelease4 =
     toIrixVersion "v0.11.0-irix.4" == "0.11.0-irix.4"
+prop_toIrixVersionRelease6 =
+    toIrixVersion "v0.11.0-irix.6" == "0.11.0-irix.6"
 prop_toIrixVersionSnapshot =
     toIrixVersion "v0.11.0-irix.4-2-g1234567" ==
         "0.11.0-irix.4-2-g1234567"

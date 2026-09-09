@@ -1,3 +1,9 @@
+## v0.11.0-irix.6 - 2026-09-09
+### Fixed
+- SC2094 now recognizes `cat` file operands as reads, avoiding false positives
+  when a pipeline reads the same file more than once without overwriting it.
+
+
 ## v0.11.0-irix.5 - 2026-09-08
 ### Fixed
 - SC2012 is suppressed for the IRIX shell profiles, where its suggested
