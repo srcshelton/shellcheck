@@ -105,6 +105,13 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     *irix-sh* models IRIX `/sbin/sh`; *irix-ksh* models the same IRIX shell
     executable when invoked in Korn-shell mode.
 
+    Native IRIX sh and ksh may discard an older asynchronous child's saved
+    status after waiting for a newer child, causing a later **wait** for the
+    older PID to return 127. The optional *check-irix-wait-status* diagnostic
+    detects focused instances of this pattern. A robust monitor child should
+    write the target command's status atomically to a status file before it
+    exits; use any late **wait** only for process reaping or diagnostics.
+
 **--sh-variant=***shell*
 
 :   Treat a generic `sh` shebang as the specified dialect. This affects scripts

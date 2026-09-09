@@ -287,6 +287,13 @@ optionalTreeChecks = [
     }, nodeChecksToTreeCheck [checkExitInSubshell])
 
     ,(newCheckDescription {
+        cdName = "check-irix-wait-status",
+        cdDescription = "Warn when IRIX may discard an older asynchronous child's status",
+        cdPositive = "# shellcheck shell=irix-sh\nlong & old=$!; short & newer=$!; wait \"$newer\"; wait \"$old\"",
+        cdNegative = "# shellcheck shell=irix-sh\nlong & old=$!; short & newer=$!; wait \"$old\"; wait \"$newer\""
+    }, nodeChecksToTreeCheck [checkIrixWaitStatus])
+
+    ,(newCheckDescription {
         cdName = "require-final-case-terminator",
         cdDescription = "Suggest ending the final case branch with ;;",
         cdPositive = "case $var in value) echo yes; esac",
@@ -2697,6 +2704,178 @@ checkExitInSubshell params command@T_SimpleCommand {}
     message _ =
         "This exit only terminates an implicit pipeline subshell; the parent shell continues."
 checkExitInSubshell _ _ = return ()
+
+
+prop_checkIrixWaitStatus1 = verifyCodes checkIrixWaitStatus [2348] $ unlines
+    [ "# shellcheck shell=irix-sh"
+    , "(sleep 2; exit 7) &"
+    , "old=$!"
+    , "(sleep 1; exit 0) &"
+    , "newer=$!"
+    , "wait \"$newer\""
+    , "newer_rc=$?"
+    , "sleep 2"
+    , "wait \"$old\""
+    ]
+prop_checkIrixWaitStatus2 = verifyCodes checkIrixWaitStatus [2348] $ unlines
+    [ "# shellcheck shell=irix-ksh"
+    , "long & old=$!"
+    , "short & newer=$!"
+    , "wait \"$newer\""
+    , "wait \"$old\""
+    ]
+prop_checkIrixWaitStatus3 = verifyNot checkIrixWaitStatus $ unlines
+    [ "# shellcheck shell=irix-sh"
+    , "long & old=$!"
+    , "short & newer=$!"
+    , "wait \"$old\""
+    , "wait \"$newer\""
+    ]
+prop_checkIrixWaitStatus4 = verifyNot checkIrixWaitStatus $ unlines
+    [ "# shellcheck shell=irix-sh"
+    , "long & old=$!"
+    , "short & newer=$!"
+    , "wait \"$old\""
+    ]
+prop_checkIrixWaitStatus5 = verifyNot checkIrixWaitStatus $ unlines
+    [ "#!/bin/ksh"
+    , "long & old=$!"
+    , "short & newer=$!"
+    , "wait \"$newer\""
+    , "wait \"$old\""
+    ]
+prop_checkIrixWaitStatus6 = verifyNot checkIrixWaitStatus $ unlines
+    [ "# shellcheck shell=irix-sh"
+    , "long & old=$!"
+    , "short & newer=$!"
+    , "wait \"$newer\""
+    , "old=unrelated"
+    , "wait \"$old\""
+    ]
+prop_checkIrixWaitStatus7 = verify checkIrixWaitStatus $ unlines
+    [ "# shellcheck shell=irix-sh"
+    , "long & original=$!"
+    , "old=$original"
+    , "short & newer=$!"
+    , "wait \"$newer\" || newer_rc=$?"
+    , "wait \"$old\""
+    ]
+prop_checkIrixWaitStatus8 = verifyNot checkIrixWaitStatus $ unlines
+    [ "# shellcheck shell=irix-sh"
+    , "long & old=$!"
+    , "short & newer=$!"
+    , "wait \"$newer\" \"$old\""
+    ]
+prop_checkIrixWaitStatus9 = verifyNot checkIrixWaitStatus $ unlines
+    [ "# shellcheck shell=irix-sh"
+    , "long & old=$!"
+    , "short &"
+    , "wait \"$old\""
+    ]
+
+data IrixWaitState = IrixWaitState {
+    irixLastBackground :: Int,
+    irixSavedPids :: Map.Map String Int,
+    irixNewestWaited :: Maybe Int
+    }
+
+checkIrixWaitStatus params token
+    | shellType params `notElem` [IrixSh, IrixKsh] = return ()
+    -- An annotation delegates to its child. Processing both would diagnose
+    -- the same script or compound command twice.
+    | T_Annotation {} <- token = return ()
+    | otherwise = mapM_ (tell . analyzeSequence) $ getCommandSequences token
+  where
+    initialState = IrixWaitState 0 Map.empty Nothing
+
+    analyzeSequence commands =
+        concat . snd $ mapAccumL analyzeCommand initialState commands
+
+    analyzeCommand state command
+        | isBackgroundCommand command =
+            (state { irixLastBackground = irixLastBackground state + 1 }, [])
+        | otherwise =
+            let assigned = applyAssignments state command
+            in applyWait assigned command
+
+    isBackgroundCommand t =
+        case t of
+            T_Annotation _ _ child -> isBackgroundCommand child
+            T_Backgrounded {} -> True
+            _ -> False
+
+    directCommand t =
+        case t of
+            T_Annotation _ _ child -> directCommand child
+            T_Pipeline _ [] [child] -> directCommand child
+            T_Redirecting _ _ child -> directCommand child
+            T_AndIf _ lhs _ -> directCommand lhs
+            T_OrIf _ lhs _ -> directCommand lhs
+            _ -> t
+
+    applyAssignments state command =
+        state { irixSavedPids = foldl update saved assignments }
+      where
+        saved = irixSavedPids state
+        assignments = getModifiedVariables params $ directCommand command
+        update known (_, _, name, source) =
+            case generationFromSource state known source of
+                Just generation -> Map.insert name generation known
+                Nothing -> Map.delete name known
+
+    generationFromSource state known (DataString (SourceFrom [value]))
+        | isLastBackgroundExpansion value =
+            let generation = irixLastBackground state
+            in if generation > 0 then Just generation else Nothing
+        | otherwise = exactVariableExpansion value >>= (`Map.lookup` known)
+    generationFromSource _ _ _ = Nothing
+
+    isLastBackgroundExpansion value =
+        case getWordParts value of
+            [T_DollarBraced _ _ contents] -> concat (oversimplify contents) == "!"
+            _ -> False
+
+    exactVariableExpansion value = do
+        [T_DollarBraced _ _ contents] <- return $ getWordParts value
+        let source = concat $ oversimplify contents
+        let name = getBracedReference source
+        guard $ source == name && isVariableName name
+        return name
+
+    waitTargets command = do
+        argv <- getCommandArgv $ directCommand command
+        case argv of
+            name:arguments | getLiteralString name == Just "wait" ->
+                return $ mapMaybe target arguments
+            _ -> Nothing
+      where
+        target argument = do
+            name <- exactVariableExpansion argument
+            return (argument, name)
+
+    applyWait state command =
+        case waitTargets command of
+            Nothing -> (state, [])
+            Just targets ->
+                let known = mapMaybe resolve targets
+                    waitedGenerations = map (\(_, _, generation) -> generation) known
+                    comments = mapMaybe warnFor known
+                    remaining = Map.filter (`notElem` waitedGenerations) $ irixSavedPids state
+                    newest = foldl newer (irixNewestWaited state) waitedGenerations
+                in (state { irixSavedPids = remaining, irixNewestWaited = newest }, comments)
+      where
+        resolve (argument, name) = do
+            generation <- Map.lookup name $ irixSavedPids state
+            return (argument, name, generation)
+
+        warnFor (argument, _, generation) = do
+            newest <- irixNewestWaited state
+            guard $ newest > generation
+            return $ makeComment WarningC (getId argument) 2348
+                "IRIX sh/ksh may return 127 here after waiting for a newer child. Have a dedicated monitor record this child's status before later waits."
+
+        newer Nothing generation = Just generation
+        newer (Just current) generation = Just $ max current generation
 
 
 prop_checkFinalCaseTerminator1 = verify checkFinalCaseTerminator "case $var in value) echo yes; esac"

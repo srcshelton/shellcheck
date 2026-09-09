@@ -1,3 +1,10 @@
+## Unreleased
+### Added
+- SC2348: Optional `check-irix-wait-status` warning for waits whose saved
+  status may have been discarded after waiting for a newer child under native
+  IRIX sh or ksh.
+
+
 ## v0.11.0-irix.7 - 2026-09-09
 ### Fixed
 - SC2037 once again diagnoses option-like command words following an unquoted

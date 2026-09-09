@@ -196,6 +196,8 @@ prop_forkOptionalsUseExpectedSeverity = all hasExpectedSeverity cases
         , ("check-unbound-variables", 2344, InfoC, "set -u; echo \"$var\"")
         , ("check-exit-in-subshell", 2345, WarningC,
             "input | while read -r line; do exit 1; done")
+        , ("check-irix-wait-status", 2348, WarningC,
+            "# shellcheck shell=irix-sh\nlong & old=$!; short & newer=$!; wait \"$newer\"; wait \"$old\"")
         , ("require-final-case-terminator", 2346, StyleC,
             "case $var in value) echo yes; esac")
         , ("require-double-brackets", 2292, StyleC, "[ -e /etc/issue ]")
