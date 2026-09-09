@@ -1,3 +1,12 @@
+## v0.11.0-irix.7 - 2026-09-09
+### Fixed
+- SC2037 once again diagnoses option-like command words following an unquoted
+  assignment under `irix-sh`; IRIX `/sbin/sh` does not treat them as part of
+  the assigned value.
+- `check-unused-suppressions` now recognizes directives used by CFG-derived
+  diagnostics such as SC2317 on an unreachable here-document carrier.
+
+
 ## v0.11.0-irix.6 - 2026-09-09
 ### Fixed
 - SC2094 now recognizes `cat` file operands as reads, avoiding false positives
