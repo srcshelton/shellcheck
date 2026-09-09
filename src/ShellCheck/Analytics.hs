@@ -547,16 +547,13 @@ prop_checkAssignAteCommand4 = verifyNot checkAssignAteCommand "A=foo ls -l"
 prop_checkAssignAteCommand5 = verify checkAssignAteCommand "PAGER=cat grep bar"
 prop_checkAssignAteCommand6 = verifyNot checkAssignAteCommand "PAGER=\"cat\" grep bar"
 prop_checkAssignAteCommand7 = verify checkAssignAteCommand "here=pwd"
-prop_checkAssignAteCommandIrix = verifyNot checkAssignAteCommand "# shellcheck shell=irix-sh\nCSU=csu_off -C"
+prop_checkAssignAteCommandIrix = verify checkAssignAteCommand "# shellcheck shell=irix-sh\nCSU=csu_off -C"
 checkAssignAteCommand params (T_SimpleCommand id [T_Assignment _ _ _ _ assignmentTerm] list) =
     -- Check if first word is intended as an argument (flag or glob).
     if firstWordIsArg list
     then
-        -- IRIX sh accepts additional words as part of an unquoted assignment,
-        -- e.g. CSU=csu_off -C assigns the two-word command to CSU.
-        unless (shellType params == IrixSh) $
-            err id 2037 $ "To assign the output of a command, use var=" ++
-                commandSubstitution params "cmd" ++ " ."
+        err id 2037 $ "To assign the output of a command, use var=" ++
+            commandSubstitution params "cmd" ++ " ."
     else
         -- Check if it's a known, unquoted command name.
         when (isCommonCommand $ getUnquotedLiteral assignmentTerm) $

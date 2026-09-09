@@ -308,8 +308,8 @@ prop_irixAcceptsBareIntegerVariables =
     null $ intersect [2050, 2170] $ checkIrix "typeset -i index=1\n[ index -eq 1 ]"
 prop_irixAcceptsLegacyBackticks =
     3068 `notElem` checkIrix "value=`echo hi`"
-prop_irixAcceptsMultiwordAssignment =
-    2037 `notElem` checkIrix "CSU=csu_off -C"
+prop_irixRejectsMultiwordAssignment =
+    2037 `elem` checkIrix "CSU=csu_off -C"
 prop_irixAcceptsQuotedRegexClasses =
     1087 `notElem` checkIrix "egrep \"^$DSK[ \\t][ \\t]*$MOUNTPT[ \\t]\" file"
 prop_irixAcceptsQuotedRegexLiteralTabs =
