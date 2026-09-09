@@ -929,6 +929,15 @@ prop_checkRedirectToSame7 = verifyNot checkRedirectToSame "sed 's/foo/bar/g' fil
 prop_checkRedirectToSame8 = verifyNot checkRedirectToSame "while read -r line; do _=\"$fname\"; done <\"$fname\""
 prop_checkRedirectToSame9 = verifyNot checkRedirectToSame "while read -r line; do cat < \"$fname\"; done <\"$fname\""
 prop_checkRedirectToSame10 = verifyNot checkRedirectToSame "mapfile -t foo <foo"
+prop_checkRedirectToSame11 = verifyNot checkRedirectToSame $ unlines
+    [ "base=/tmp/$$"
+    , "sed <\"$base.sql\" | while read value"
+    , "do"
+    , "    cat \"$base.sql\" >\"$base.err\""
+    , "done"
+    ]
+prop_checkRedirectToSame12 = verify checkRedirectToSame
+    "base=/tmp/$$; cat \"$base.sql\" >\"$base.sql\""
 checkRedirectToSame params s@(T_Pipeline _ _ list) =
     mapM_ (\l -> (mapM_ (\x -> doAnalysis (checkOccurrences x) l) (getAllRedirs list))) list
   where
@@ -962,7 +971,7 @@ checkRedirectToSame params s@(T_Pipeline _ _ list) =
                 case op of
                     T_Less _  -> True
                     _ -> False
-            _ -> False
+            _ -> isParamTo (parentMap params) "cat" t
     isOutput t =
         case NE.tail $ getPath (parentMap params) t of
             T_IoFile _ op _:_ ->
