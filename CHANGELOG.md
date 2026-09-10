@@ -1,8 +1,12 @@
 ## Unreleased
 ### Added
-- SC2348: Optional `check-irix-wait-status` warning for waits whose saved
-  status may have been discarded after waiting for a newer child under native
-  IRIX sh or ksh.
+- SC2348: `check-irix-wait-status` warning for waits whose saved status may
+  have been discarded after waiting for a newer child under native IRIX sh or
+  ksh.
+
+### Changed
+- The `irix-sh` and `irix-ksh` profiles enable `check-irix-wait-status` and
+  `check-unused-suppressions` by default. House-style checks remain opt-in.
 
 
 ## v0.11.0-irix.7 - 2026-09-09

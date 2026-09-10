@@ -165,14 +165,36 @@ checkWithOption option src =
 -- Exercise optional checks through the same parse/analyze/filter path used by
 -- callers. The module-local example tests verify each implementation directly;
 -- this additionally catches missing registration and accidental default enablement.
+-- IRIX profiles deliberately enable their platform-specific safety check.
 prop_optionalExamplesWorkThroughChecker = all checkOptional optionalChecks
   where
     checkOptional description =
         let name = cdName description
             positive = cdPositive description
             negative = cdNegative description
-        in length (checkWithOption name positive) > length (check positive)
-            && checkWithOption name negative == check negative
+        in if name == "check-irix-wait-status"
+            then checkWithOption name positive == check positive
+                && checkWithOption name negative == check negative
+            else length (checkWithOption name positive) > length (check positive)
+                && checkWithOption name negative == check negative
+
+prop_irixProfilesEnableSafetyChecksByDefault = conjoin
+    [ counterexample "irix-sh did not enable SC2337 and SC2348" $
+        all (`elem` checkIrix source) [2337, 2348]
+    , counterexample "irix-ksh did not enable SC2337 and SC2348" $
+        all (`elem` checkIrixKsh source) [2337, 2348]
+    , counterexample "generic ksh unexpectedly enabled IRIX profile checks" $
+        null $ intersect [2337, 2348] $ check genericSource
+    ]
+  where
+    source = unlines
+        [ "# shellcheck disable=SC2086"
+        , "long & old=$!"
+        , "short & newer=$!"
+        , "wait \"$newer\""
+        , "wait \"$old\""
+        ]
+    genericSource = "#!/bin/ksh\n" ++ source
 
 prop_forkOptionalsUseExpectedSeverity = all hasExpectedSeverity cases
   where

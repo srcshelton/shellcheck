@@ -107,10 +107,13 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
 
     Native IRIX sh and ksh may discard an older asynchronous child's saved
     status after waiting for a newer child, causing a later **wait** for the
-    older PID to return 127. The optional *check-irix-wait-status* diagnostic
-    detects focused instances of this pattern. A robust monitor child should
-    write the target command's status atomically to a status file before it
-    exits; use any late **wait** only for process reaping or diagnostics.
+    older PID to return 127. The *check-irix-wait-status* diagnostic detects
+    focused instances of this pattern and is enabled by default for both IRIX
+    profiles. They also enable *check-unused-suppressions* so that obsolete
+    workarounds can be identified after switching to an IRIX-aware profile.
+    A robust monitor child should write the target command's status atomically
+    to a status file before it exits; use any late **wait** only for process
+    reaping or diagnostics.
 
 **--sh-variant=***shell*
 

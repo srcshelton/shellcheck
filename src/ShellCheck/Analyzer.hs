@@ -43,10 +43,17 @@ analyzeScript spec = newAnalysisResult {
 }
   where
     params = makeParameters spec
-    rawComments = nub $ runChecker params (checkers spec params)
+    effectiveSpec = spec {
+        asOptionalChecks = nub $
+            asOptionalChecks spec ++ profileDefaultOptionalChecks (shellType params)
+    }
+    rawComments = nub $ runChecker params (checkers effectiveSpec params)
     unusedCheckEnabled =
-        any (`elem` ["all", "check-unused-suppressions"]) (asOptionalChecks spec)
-    unsuppressedSpec = spec { asScript = stripDisableDirectives $ asScript spec }
+        any (`elem` ["all", "check-unused-suppressions"])
+            (asOptionalChecks effectiveSpec)
+    unsuppressedSpec = effectiveSpec {
+        asScript = stripDisableDirectives $ asScript effectiveSpec
+    }
     unsuppressedParams = makeParameters unsuppressedSpec
     suppressionCandidates =
         if unusedCheckEnabled
@@ -58,6 +65,11 @@ analyzeScript spec = newAnalysisResult {
         if unusedCheckEnabled
         then mapMaybe unusedComment $ getDisableDirectives (asScript spec)
         else []
+
+    profileDefaultOptionalChecks shell
+        | shell `elem` [IrixSh, IrixKsh] =
+            ["check-irix-wait-status", "check-unused-suppressions"]
+        | otherwise = []
 
     stripDisableDirectives = doTransform strip
       where
