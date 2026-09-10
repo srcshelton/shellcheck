@@ -5082,10 +5082,11 @@ prop_checkComparisonWithLeadingX5 = verify checkComparisonWithLeadingX "[ \"x$fo
 prop_checkComparisonWithLeadingX6 = verify checkComparisonWithLeadingX "[ x\"$foo\" = x'lol' ]"
 prop_checkComparisonWithLeadingX7 = verify checkComparisonWithLeadingX "[ X$foo != Xbar ]"
 prop_checkComparisonWithLeadingXIrix = verifyNot checkComparisonWithLeadingX "# shellcheck shell=irix-sh\n[ x\"$foo\" = xbar ]"
+prop_checkComparisonWithLeadingXIrixKsh = verifyNot checkComparisonWithLeadingX "# shellcheck shell=irix-ksh\ntest \"x$foo\" != x"
 checkComparisonWithLeadingX params t
   -- The prefix protects IRIX test from values such as "!" and "(" that it
   -- otherwise interprets as operators rather than string operands.
-  | shellType params == IrixSh = return ()
+  | isIrixPlatformShell (shellType params) = return ()
   | otherwise =
     case t of
         TC_Binary id typ op lhs rhs

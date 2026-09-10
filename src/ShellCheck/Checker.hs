@@ -391,6 +391,7 @@ prop_irixOmitsInapplicablePlatformAdvice =
         , (2021, "tr '[a-z]' '[A-Z]'")
         , (2196, "egrep pattern file")
         , (2197, "fgrep pattern file")
+        , (2197, "echo PCP | /usr/bin/fgrep -s PCP")
         , (2267, "xargs -i echo {}")
         , (2268, "[ x\"$value\" = x ]")
         ]
@@ -454,7 +455,10 @@ prop_irixKshOmitsInapplicablePlatformAdvice =
         , (2028, "echo '\\n'")
         , (2196, "egrep pattern file")
         , (2197, "fgrep pattern file")
+        , (2197, "echo PCP | /usr/bin/fgrep -s PCP")
         , (2219, "let value=value+1")
+        , (2268, "[ x\"$value\" = x ]")
+        , (2268, "test \"x$value\" != x")
         , (2267, "xargs -i echo {}")
         , (2336, "cp -r source destination")
         ]
@@ -469,7 +473,6 @@ prop_irixKshRetainsApplicableDiagnostics =
         , (2050, "[ constant = constant ]")
         , (2086, "echo $value")
         , (2162, "read value")
-        , (2268, "[ x\"$value\" = x ]")
         , (3060, "echo \"${value//a/b}\"")
         ]
 prop_irixKshAcceptsIrixCoprocess =

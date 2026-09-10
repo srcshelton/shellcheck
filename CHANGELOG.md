@@ -12,6 +12,10 @@
 - The `irix-sh` and `irix-ksh` profiles enable `check-irix-wait-status` and
   `check-unused-suppressions` by default. House-style checks remain opt-in.
 
+### Fixed
+- SC2268 no longer removes protective `x` prefixes under `irix-ksh`; its
+  native `test` also misinterprets values such as `!` and `(` as operators.
+
 
 ## v0.11.0-irix.7 - 2026-09-09
 ### Fixed
