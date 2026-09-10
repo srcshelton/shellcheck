@@ -105,6 +105,12 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     *irix-sh* models IRIX `/sbin/sh`; *irix-ksh* models the same IRIX shell
     executable when invoked in Korn-shell mode.
 
+    In both IRIX profiles, nested double quotes in a double-quoted parameter expansion
+    can expose literal spaces or shell operators. For example,
+    `"${args%%"$1 "*}"` is invalid, while `"${args%%"$1" *}"` is valid.
+    SC3069 diagnoses this boundary; SC2295's token-local quote fix preserves
+    the valid form.
+
     Native IRIX sh and ksh may discard an older asynchronous child's saved
     status after waiting for a newer child, causing a later **wait** for the
     older PID to return 127. The *check-irix-wait-status* diagnostic detects

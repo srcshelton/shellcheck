@@ -1,10 +1,14 @@
 ## Unreleased
 ### Added
+- SC3069: diagnose literal shell delimiters exposed by nested parameter-word
+  quotes under `irix-sh` and `irix-ksh`.
 - SC2348: `check-irix-wait-status` warning for waits whose saved status may
   have been discarded after waiting for a newer child under native IRIX sh or
   ksh.
 
 ### Changed
+- Clarify IRIX SC2295 advice while retaining its valid token-local quote fix;
+  avoid SC2339 style advice that would introduce invalid nested quoting.
 - The `irix-sh` and `irix-ksh` profiles enable `check-irix-wait-status` and
   `check-unused-suppressions` by default. House-style checks remain opt-in.
 

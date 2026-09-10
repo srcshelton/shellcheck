@@ -200,6 +200,7 @@ nodeChecks = [
     ,checkComparisonWithLeadingX
     ,checkCommandWithTrailingSymbol
     ,checkUnquotedParameterExpansionPattern
+    ,checkIrixNestedParameterQuotes
     ,checkBatsTestDoesNotUseNegation
     ,checkCommandIsUnreachable
     ,checkSpacefulnessCfg
@@ -2520,10 +2521,18 @@ prop_checkQuotedParameterExpansionWords4 = verifyNot checkQuotedParameterExpansi
 prop_checkQuotedParameterExpansionWords5 = verifyNot checkQuotedParameterExpansionWords "echo \"${var:=\"assigned\"}\""
 prop_checkQuotedParameterExpansionWords6 = verifyNot checkQuotedParameterExpansionWords "echo \"${var:+alternate}\""
 prop_checkQuotedParameterExpansionWords7 = verifyNot checkQuotedParameterExpansionWords "echo \"${var:-}\""
-checkQuotedParameterExpansionWords _ (T_DollarBraced id True (T_NormalWord _ (T_Literal _ first:rest))) =
+prop_checkQuotedParameterExpansionWordsIrixSpace = verifyNot checkQuotedParameterExpansionWords "# shellcheck shell=irix-sh\necho \"${var:-a b}\""
+prop_checkQuotedParameterExpansionWordsIrixOperator = verifyNot checkQuotedParameterExpansionWords "# shellcheck shell=irix-sh\necho \"${var:=a;b}\""
+prop_checkQuotedParameterExpansionWordsIrixBare = verify checkQuotedParameterExpansionWords "# shellcheck shell=irix-sh\necho ${var:-a b}"
+prop_checkQuotedParameterExpansionWordsIrixSimple = verify checkQuotedParameterExpansionWords "# shellcheck shell=irix-sh\necho \"${var:-default}\""
+prop_checkQuotedParameterExpansionWordsIrixKsh = verifyNot checkQuotedParameterExpansionWords "# shellcheck shell=irix-ksh\necho \"${var:-a b}\""
+checkQuotedParameterExpansionWords params t@(T_DollarBraced id True (T_NormalWord _ (T_Literal _ first:rest))) =
     case find (`isPrefixOf` modifier) [":-", ":=", "-", "="] of
         Just operator
-            | hasWord operator && not (isDoubleQuotedWord operator) ->
+            | hasWord operator && not (isDoubleQuotedWord operator)
+            , not $ irixDoubleQuotedParameter params t &&
+                any (`elem` irixQuoteDelimiters)
+                    (remainder operator ++ concatMap (concat . oversimplify) rest) ->
                 style id 2339 "Prefer double quoting this parameter expansion word."
         _ -> return ()
   where
@@ -5420,8 +5429,10 @@ checkRequireDoubleBracket params =
         TC_Nullary {} -> True
         _ -> False
 
-appliesFix expected source =
-    case runAndGetComments checkRequireDoubleBracket source of
+appliesFix = appliesFixFor checkRequireDoubleBracket
+
+appliesFixFor checker expected source =
+    case runAndGetComments checker source of
         Just comments ->
             case mapMaybe tcFix comments of
                 [] -> False
@@ -5436,6 +5447,17 @@ prop_checkUnquotedParameterExpansionPattern1 = verify checkUnquotedParameterExpa
 prop_checkUnquotedParameterExpansionPattern2 = verify checkUnquotedParameterExpansionPattern  "echo \"${var%%$(x)}\""
 prop_checkUnquotedParameterExpansionPattern3 = verifyNot checkUnquotedParameterExpansionPattern  "echo \"${var[#$x]}\""
 prop_checkUnquotedParameterExpansionPattern4 = verifyNot checkUnquotedParameterExpansionPattern  "echo \"${var%\"$x\"}\""
+prop_checkUnquotedParameterExpansionPatternIrixFix =
+    all (uncurry fixes) [ ("echo \"${args%%\"$1\" *}\"", "echo \"${args%%$1 *}\"")
+                       , ("echo \"${m_opts%%\"$opt\"*}\"", "echo \"${m_opts%%$opt*}\"")
+                       , ("echo \"${1%\"$arg\"}\"", "echo \"${1%$arg}\"")
+                       , ("echo \"${var%\"${suffix:-a b}\"}\"", "echo \"${var%${suffix:-a b}}\"")
+                       , ("echo \"${var%\"`echo a b`\"}\"", "echo \"${var%`echo a b`}\"")
+                       ]
+  where
+    fixes expected source = appliesFixFor (runNodeAnalysis checkUnquotedParameterExpansionPattern)
+        (prefix ++ expected) (prefix ++ source)
+    prefix = "# shellcheck shell=irix-sh\n"
 
 checkUnquotedParameterExpansionPattern params x =
     case x of
@@ -5454,8 +5476,47 @@ checkUnquotedParameterExpansionPattern params x =
 
     inform t =
         infoWithFix (getId t) 2295
-            "Expansions inside ${..} need to be quoted separately, otherwise they match as patterns." $
+            (if isIrixPlatformShell $ shellType params
+             then "Quote this expansion separately to match literally; in IRIX shells, keep literal spaces and shell operators outside the inner quotes."
+             else "Expansions inside ${..} need to be quoted separately, otherwise they match as patterns.") $
                 surroundWith (getId t) params "\""
+
+
+-- IRIX shells lex quotes in ${..} relative to the surrounding quote state.
+-- A nested quote can therefore expose a literal word/operator delimiter,
+-- although quoting just an expansion (e.g. "${var%"$suffix"}") works.
+-- Stop at command substitutions/commands: their quote state is independent.
+irixDoubleQuotedParameter params token =
+    isIrixPlatformShell (shellType params) && quoted (NE.tail $ getPath (parentMap params) token)
+  where
+    quoted (T_NormalWord {} : rest) = quoted rest
+    quoted (T_DollarBraced {} : rest) = quoted rest
+    quoted (T_DoubleQuoted {} : _) = True
+    quoted _ = False
+
+irixQuoteDelimiters = " \t\n;|&()<>"
+
+prop_checkIrixNestedParameterQuotes1 = verify checkIrixNestedParameterQuotes "# shellcheck shell=irix-sh\necho \"${args%%\"$1 \"*}\""
+prop_checkIrixNestedParameterQuotes2 = verify checkIrixNestedParameterQuotes "# shellcheck shell=irix-sh\necho \"${v:-${x%\" \"}}\""
+prop_checkIrixNestedParameterQuotes3 = verifyNot checkIrixNestedParameterQuotes "# shellcheck shell=irix-sh\necho \"$(echo ${var%\" \"})\""
+prop_checkIrixNestedParameterQuotes4 = verifyNot checkIrixNestedParameterQuotes "# shellcheck shell=bash\necho \"${args%%\"$1 \"*}\""
+prop_checkIrixNestedParameterQuotes5 = verifyNot checkIrixNestedParameterQuotes "# shellcheck shell=sh\necho \"${args%%\"$1 \"*}\""
+checkIrixNestedParameterQuotes params token@(T_DollarBraced _ True (T_NormalWord _ parts))
+    | irixDoubleQuotedParameter params token = mapM_ check parts
+  where
+    check (T_DoubleQuoted id children)
+        | any literalDelimiter children =
+            err id 3069 "In IRIX shells, these inner quotes expose literal spaces or shell operators. Keep those characters outside the inner quotes."
+    check _ = return ()
+
+    literalDelimiter (T_Literal _ value) = unescapedDelimiter value
+    literalDelimiter _ = False
+    -- The parser preserves backslashes before these delimiters in double
+    -- quotes. They protect the delimiter under IRIX's outer quote state.
+    unescapedDelimiter ('\\' : _ : rest) = unescapedDelimiter rest
+    unescapedDelimiter (c : rest) = c `elem` irixQuoteDelimiters || unescapedDelimiter rest
+    unescapedDelimiter [] = False
+checkIrixNestedParameterQuotes _ _ = return ()
 
 
 prop_checkArrayValueUsedAsIndex1 = verifyTree checkArrayValueUsedAsIndex  "for i in ${arr[@]}; do echo ${arr[i]}; done"

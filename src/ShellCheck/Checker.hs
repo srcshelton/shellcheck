@@ -351,6 +351,29 @@ prop_irixStillDiagnosesUnbracedArray =
     1087 `elem` checkIrix "echo \"$array[0]\""
 prop_irixRejectsDollarCommandSubstitution =
     3068 `elem` checkIrix "value=$(echo hi)"
+prop_irixRejectsQuotedRemovalDelimiters =
+    conjoin [counterexample (name ++ ": " ++ source) $ 3069 `elem` checkProfile source
+            | (name, checkProfile) <- [("irix-sh", checkIrix), ("irix-ksh", checkIrixKsh)]
+            , op <- ["%", "%%", "#", "##", ":-", ":=", ":+", ":?"]
+            , delimiter <- [" ", "\t", "\n", ";", "|", "&", "(", ")", "<", ">"]
+            , let source = "echo \"${args" ++ op ++ "\"$1" ++ delimiter ++ "\"*}\""]
+prop_irixAcceptsValidRemovalQuotes =
+    conjoin [counterexample (name ++ ": " ++ source) $ 3069 `notElem` checkProfile source
+            | (name, checkProfile) <- [("irix-sh", checkIrix), ("irix-ksh", checkIrixKsh)]
+            , source <- [ "echo ${args%%\"$1 \"*}"
+                        , "echo \"${args%%\"$1\" *}\""
+                        , "echo \"${m_opts%%\"$opt\"*}\""
+                        , "echo \"${1%\"$arg\"}\""
+                        , "echo ${m_opts%%\"$opt\"*} ${1%\"$arg\"}"
+                        , "echo \"${var%\"a\\ b\"}\""
+                        , "echo \"${var%\"a\\;b\"}\""
+                        , "echo \"${var:-\"default\"}\""
+                        , "echo \"${var:-a b}\""
+                        , "echo \"${var%\"${suffix:-a b}\"}\""
+                        , "echo \"${var%\"`echo a b`\"}\""
+                        ]]
+prop_irixRemovalDelimiterDiagnosticCanBeDisabled =
+    3069 `notElem` checkIrix "# shellcheck disable=SC3069\necho \"${args%%\"$1 \"*}\""
 prop_irixStillFindsConstantComparison =
     2050 `elem` checkIrix "[ \"FA_PORT\" = \"80\" ]"
 prop_irixStillFindsConstantNullaryTest =
