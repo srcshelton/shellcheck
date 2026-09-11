@@ -1,3 +1,10 @@
+## Unreleased
+### Fixed
+- SC2337 preserves suppressions of disabled optional diagnostics, including
+  SC2312, SC2344 and SC2345, while still identifying obsolete suppressions
+  when their checks are enabled (#2367).
+
+
 ## v0.11.0-irix.8 - 2026-09-11
 ### Added
 - SC3069: diagnose literal shell delimiters exposed by nested parameter-word

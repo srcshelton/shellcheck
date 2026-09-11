@@ -54,6 +54,7 @@ import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as S
 import Test.QuickCheck.All (forAllProperties)
+import Test.QuickCheck (conjoin, counterexample)
 import Test.QuickCheck.Test (quickCheckWithResult, stdArgs, maxSuccess)
 
 -- Checks that are run on the AST root
@@ -215,6 +216,15 @@ nodeChecks = [
 
 optionalChecks = map fst optionalTreeChecks
 
+prop_optionalDiagnosticMetadata = conjoin $ map check optionalTreeChecks
+  where
+    check (description, checker) = counterexample (cdName description ++ ": " ++ show codes) $
+        maybe False (all knownCode) codes
+      where
+        codes = map (cCode . tcComment) <$> runAndGetComments checker (cdPositive description)
+        knownCode code = code `elem`
+            (cdOptionalCodes description ++ sharedCodes)
+        sharedCodes = [2154 | cdName description == "check-unassigned-uppercase"]
 
 prop_verifyOptionalExamples = all check optionalTreeChecks
   where
@@ -226,6 +236,7 @@ optionalTreeChecks :: [(CheckDescription, (Parameters -> Token -> [TokenComment]
 optionalTreeChecks = [
     (newCheckDescription {
         cdName = "quote-safe-variables",
+        cdOptionalCodes = [2248],
         cdDescription = "Suggest quoting variables without metacharacters",
         cdPositive = "var=hello; echo $var",
         cdNegative = "var=hello; echo \"$var\""
@@ -233,6 +244,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "prefer-single-quotes",
+        cdOptionalCodes = [2338],
         cdDescription = "Suggest single quotes for constant strings",
         cdPositive = "var=\"constant\"",
         cdNegative = "var='constant'"
@@ -240,6 +252,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "require-quoted-parameter-expansion-words",
+        cdOptionalCodes = [2339],
         cdDescription = "Suggest double quoting default and assignment words in parameter expansions",
         cdPositive = "echo \"${var:-default}\"",
         cdNegative = "echo \"${var:-\"default\"}\""
@@ -247,6 +260,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "require-single-quoted-case-patterns",
+        cdOptionalCodes = [2340],
         cdDescription = "Suggest single quoting constant portions of case patterns",
         cdPositive = "case $var in value*) echo yes;; esac",
         cdNegative = "case $var in 'value'*) echo yes;; esac"
@@ -254,6 +268,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "prefer-env-shebangs",
+        cdOptionalCodes = [2341],
         cdDescription = "Suggest env-based shebangs for non-sh shells",
         cdPositive = "#!/bin/bash\ntrue",
         cdNegative = "#! /usr/bin/env bash\ntrue"
@@ -261,6 +276,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "require-shebang-space",
+        cdOptionalCodes = [2342],
         cdDescription = "Suggest a space between #! and the interpreter",
         cdPositive = "#!/bin/sh\ntrue",
         cdNegative = "#! /bin/sh\ntrue"
@@ -268,6 +284,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "require-variable-quotes",
+        cdOptionalCodes = [2343],
         cdDescription = "Suggest double quoting variable expansions wherever quotes preserve their role",
         cdPositive = "[[ ${var} ]]",
         cdNegative = "[[ \"${var}\" ]]"
@@ -275,6 +292,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "check-unbound-variables",
+        cdOptionalCodes = [2344],
         cdDescription = "Warn about expansions that may fail under set -u",
         cdPositive = "set -u; [ -n \"$var\" ]",
         cdNegative = "set -u; [ -n \"${var:-}\" ]"
@@ -282,6 +300,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "check-exit-in-subshell",
+        cdOptionalCodes = [2345],
         cdDescription = "Warn about exit or return in implicit pipeline subshells",
         cdPositive = "input | while read -r line; do exit 1; done",
         cdNegative = "while read -r line; do exit 1; done < input"
@@ -289,6 +308,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "check-irix-wait-status",
+        cdOptionalCodes = [2348],
         cdDescription = "Warn when IRIX may discard an older asynchronous child's status",
         cdPositive = "# shellcheck shell=irix-sh\nlong & old=$!; short & newer=$!; wait \"$newer\"; wait \"$old\"",
         cdNegative = "# shellcheck shell=irix-sh\nlong & old=$!; short & newer=$!; wait \"$old\"; wait \"$newer\""
@@ -296,6 +316,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "require-final-case-terminator",
+        cdOptionalCodes = [2346],
         cdDescription = "Suggest ending the final case branch with ;;",
         cdPositive = "case $var in value) echo yes; esac",
         cdNegative = "case $var in value) echo yes;; esac"
@@ -303,6 +324,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "avoid-nullary-conditions",
+        cdOptionalCodes = [2244],
         cdDescription = "Suggest explicitly using -n in `[ $var ]`",
         cdPositive = "[ \"$var\" ]",
         cdNegative = "[ -n \"$var\" ]"
@@ -310,6 +332,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "avoid-negated-conditions",
+        cdOptionalCodes = [2236, 2237, 2335],
         cdDescription = "Suggest removing unnecessary comparison negations",
         cdPositive = "[ ! \"$var\" -eq 1 ]",
         cdNegative = "[ \"$var\" -ne 1 ]"
@@ -317,6 +340,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "add-default-case",
+        cdOptionalCodes = [2249],
         cdDescription = "Suggest adding a default case in `case` statements",
         cdPositive = "case $? in 0) echo 'Success';; esac",
         cdNegative = "case $? in 0) echo 'Success';; *) echo 'Fail' ;; esac"
@@ -324,6 +348,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "require-variable-braces",
+        cdOptionalCodes = [2250],
         cdDescription = "Suggest putting braces around all variable references",
         cdPositive = "var=hello; echo $var",
         cdNegative = "var=hello; echo ${var}"
@@ -331,6 +356,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "check-unassigned-uppercase",
+        -- SC2154 is also emitted by the ordinary unassigned-variable check.
         cdDescription = "Warn when uppercase variables are unassigned",
         cdPositive = "echo $VAR",
         cdNegative = "VAR=hello; echo $VAR"
@@ -338,6 +364,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "require-double-brackets",
+        cdOptionalCodes = [2292],
         cdDescription = "Require [[ and warn about [ in Bash/Ksh",
         cdPositive = "[ -e /etc/issue ]",
         cdNegative = "[[ -e /etc/issue ]]"
@@ -345,6 +372,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "check-set-e-suppressed",
+        cdOptionalCodes = [2310, 2311],
         cdDescription = "Notify when set -e is suppressed during function invocation",
         cdPositive = "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func && echo ok",
         cdNegative = "set -e; func() { cp *.txt ~/backup; rm *.txt; }; func; echo ok"
@@ -352,6 +380,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "check-extra-masked-returns",
+        cdOptionalCodes = [2312],
         cdDescription = "Check for additional cases where exit codes are masked",
         cdPositive = "rm -r \"$(get_chroot_dir)/home\"",
         cdNegative = "set -e; dir=\"$(get_chroot_dir)\"; rm -r \"$dir/home\""
@@ -359,6 +388,7 @@ optionalTreeChecks = [
 
     ,(newCheckDescription {
         cdName = "useless-use-of-cat",
+        cdOptionalCodes = [2002],
         cdDescription = "Check for Useless Use Of Cat (UUOC)",
         cdPositive = "cat foo | grep bar",
         cdNegative = "grep bar foo"

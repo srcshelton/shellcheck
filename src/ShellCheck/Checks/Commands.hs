@@ -136,6 +136,7 @@ optionalCommandChecks :: [(CheckDescription, CommandCheck)]
 optionalCommandChecks = [
     (newCheckDescription {
         cdName = "deprecate-which",
+        cdOptionalCodes = [2230],
         cdDescription = "Suggest 'command -v' instead of 'which'",
         cdPositive = "which javac",
         cdNegative = "command -v javac"

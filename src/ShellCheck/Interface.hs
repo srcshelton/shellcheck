@@ -57,7 +57,7 @@ module ShellCheck.Interface
     , InsertionPoint(InsertBefore, InsertAfter)
     , Replacement(repStartPos, repEndPos, repString, repPrecedence, repInsertionPoint)
     , newReplacement
-    , CheckDescription(cdName, cdDescription, cdPositive, cdNegative)
+    , CheckDescription(cdName, cdDescription, cdPositive, cdNegative, cdOptionalCodes)
     , newCheckDescription
     ) where
 
@@ -222,14 +222,18 @@ data CheckDescription = CheckDescription {
     cdName :: String,
     cdDescription :: String,
     cdPositive :: String,
-    cdNegative :: String
+    cdNegative :: String,
+    -- Codes exclusive to optional checks. Shared default diagnostics (such
+    -- as SC2154) must remain subject to ordinary suppression checking.
+    cdOptionalCodes :: [Code]
     }
 
 newCheckDescription = CheckDescription {
     cdName = "",
     cdDescription = "",
     cdPositive = "",
-    cdNegative = ""
+    cdNegative = "",
+    cdOptionalCodes = []
     }
 
 -- Supporting data types

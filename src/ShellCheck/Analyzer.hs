@@ -110,7 +110,20 @@ analyzeScript spec = newAnalysisResult {
     unusedComment (id, from, to)
         | not (shouldCheckDirective id) = Nothing
         | id `elem` usedDirectives = Nothing
+        | coversDisabledOptional from to = Nothing
         | otherwise = Just $ makeComment StyleC id 2337 (message from to)
+
+    -- Not running an optional checker is not evidence that its suppression
+    -- is obsolete. Use the effective options so profile defaults and `all`
+    -- still receive the normal, scope-sensitive unused-suppression analysis.
+    optionEnabled description = any (`elem` ["all", cdName description])
+        (asOptionalChecks effectiveSpec)
+    inactiveOptionalCodes =
+        concatMap cdOptionalCodes (filter (not . optionEnabled) ShellCheck.Analyzer.optionalChecks)
+        \\ concatMap cdOptionalCodes (filter optionEnabled ShellCheck.Analyzer.optionalChecks)
+    coversDisabledOptional 0 1000000 = False -- `disable=all` covers this run.
+    coversDisabledOptional from to =
+        any (\code -> from <= code && code < to) inactiveOptionalCodes
     shouldCheckDirective id
         | asCheckSourced spec = True
         | otherwise =
@@ -142,6 +155,7 @@ optionalChecks = unusedSuppressionCheck : mconcat [
   where
     unusedSuppressionCheck = newCheckDescription {
         cdName = "check-unused-suppressions",
+        cdOptionalCodes = [2337],
         cdDescription = "Suggest removing disable directives that suppress no diagnostics",
         cdPositive = "# shellcheck disable=SC2086\necho \"$var\"",
         cdNegative = "# shellcheck disable=SC2086\necho $var"

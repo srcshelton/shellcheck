@@ -117,6 +117,10 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     focused instances of this pattern and is enabled by default for both IRIX
     profiles. They also enable *check-unused-suppressions* so that obsolete
     workarounds can be identified after switching to an IRIX-aware profile.
+    Suppressions of diagnostics exclusive to disabled optional checks are
+    retained until those checks are enabled. Explicit ranges containing such
+    codes are also retained; `disable=all` is checked against the enabled
+    diagnostics for the current invocation.
     A robust monitor child should write the target command's status atomically
     to a status file before it exits; use any late **wait** only for process
     reaping or diagnostics.

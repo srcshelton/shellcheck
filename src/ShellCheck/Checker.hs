@@ -319,6 +319,90 @@ prop_doesNotReportRcSuppressionsAsUnused = null result
         csIgnoreRC = False
     }
 
+optionalSuppressionCases =
+    [ ("check-extra-masked-returns", 2312, "echo `false`", "value=`false`")
+    , ("check-unbound-variables", 2344, "set -u; echo \"$missing\"", "set -u; echo \"${missing:-}\"")
+    , ("check-exit-in-subshell", 2345, "exit 1 | cat", "exit 1")
+    ]
+
+optionalSuppressionResult shell enabled code source =
+    getErrors (mockedSystemInterface []) emptyCheckSpec {
+        csScript = "# shellcheck disable=SC" ++ show code ++ "\n" ++ source,
+        csShellTypeOverride = Just shell,
+        csIncludedWarnings = Just [2337],
+        csOptionalChecks = enabled
+    }
+
+prop_preservesDisabledOptionalSuppressions = conjoin
+    [ counterexample (show shell ++ ": " ++ option ++ " / " ++ source) $
+        null $ optionalSuppressionResult shell [] code source
+    | shell <- [IrixSh, IrixKsh]
+    , (option, code, positive, negative) <- optionalSuppressionCases
+    , source <- [positive, negative]
+    ]
+
+prop_checksEnabledOptionalSuppressions = conjoin
+    [ counterexample (show shell ++ ": " ++ option) $
+        null (optionalSuppressionResult shell [option] code positive)
+        && [2337] == optionalSuppressionResult shell [option] code negative
+    | shell <- [IrixSh, IrixKsh]
+    , (option, code, positive, negative) <- optionalSuppressionCases
+    ]
+
+prop_checksOptionalSuppressionsWithEnableAll = and
+    [ null (optionalSuppressionResult shell ["all"] code positive)
+        && [2337] == optionalSuppressionResult shell ["all"] code negative
+    | shell <- [IrixSh, IrixKsh]
+    , (_, code, positive, negative) <- optionalSuppressionCases
+    ]
+
+prop_optionalSuppressionRespectsEnableDirective =
+    [2337] == checkOptionIncludes (Just [2337])
+        "# shellcheck shell=irix-sh enable=check-unbound-variables\n# shellcheck disable=SC2344\nset -u; echo \"${missing:-}\""
+
+prop_optionalSuppressionRespectsRc =
+    [2337] == checkWithRc "enable=check-unbound-variables" emptyCheckSpec {
+        csScript = "# shellcheck disable=SC2344\nset -u; echo \"${missing:-}\"",
+        csShellTypeOverride = Just IrixKsh,
+        csIncludedWarnings = Just [2337],
+        csIgnoreRC = False
+    }
+
+prop_optionalSuppressionStillChecksProfileDefaults = all (\shell ->
+    [2337] == optionalSuppressionResult shell [] 2348 "echo ok") [IrixSh, IrixKsh]
+
+prop_optionalSuppressionDoesNotHideOrdinaryCodes = all (\shell ->
+    [2337] == optionalSuppressionResult shell [] 2154 "echo ok") [IrixSh, IrixKsh]
+
+prop_optionalSuppressionChecksMixedCodesSeparately =
+    [2337] == checkOptionIncludes (Just [2337])
+        "# shellcheck shell=irix-sh\n# shellcheck disable=SC2344,SC2086\necho ok"
+
+prop_optionalSuppressionKeepsDisabledRange =
+    null $ checkOptionIncludes (Just [2337])
+        "# shellcheck shell=irix-sh\n# shellcheck disable=SC2310-SC2312\necho ok"
+
+prop_optionalSuppressionRetainsDisableAllBehaviour =
+    null $ checkOptionIncludes (Just [2337])
+        "# shellcheck shell=irix-sh\n# shellcheck disable=all\necho ok"
+
+prop_disabledOptionalMetadataIsHonoured = and
+    [ null $ optionalSuppressionResult Bash ["check-unused-suppressions"] code "echo ok"
+    | description <- optionalChecks
+    , cdName description /= "check-unused-suppressions"
+    , code <- cdOptionalCodes description
+    ]
+
+prop_optionalMetadataCoversNewDiagnostics = conjoin $ map checkDescription optionalChecks
+  where
+    checkDescription description = counterexample (cdName description ++ ": " ++ show extraCodes) $
+        all (`elem` knownCodes) extraCodes
+      where
+        source = cdPositive description
+        extraCodes = checkWithOption (cdName description) source \\ check source
+        knownCodes = cdOptionalCodes description ++
+            [2154 | cdName description == "check-unassigned-uppercase"]
+
 checkIrix src =
     getErrors
         (mockedSystemInterface [])
