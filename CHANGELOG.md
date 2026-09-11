@@ -1,4 +1,4 @@
-## Unreleased
+## v0.11.0-irix.8 - 2026-09-11
 ### Added
 - SC3069: diagnose literal shell delimiters exposed by nested parameter-word
   quotes under `irix-sh` and `irix-ksh`.
