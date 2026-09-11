@@ -1,4 +1,4 @@
-## Unreleased
+## v0.11.0-irix.9 - 2026-09-11
 ### Fixed
 - SC2337 preserves suppressions of disabled optional diagnostics, including
   SC2312, SC2344 and SC2345, while still identifying obsolete suppressions
