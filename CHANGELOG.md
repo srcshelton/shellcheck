@@ -13,6 +13,9 @@
   `check-unused-suppressions` by default. House-style checks remain opt-in.
 
 ### Fixed
+- SC2311 no longer assumes Bash-style loss of `set -e` inside command
+  substitutions under `irix-sh` or `irix-ksh`; both native shells inherit it.
+  SC2310 still checks function calls in conditions where `set -e` is suppressed.
 - SC2268 no longer removes protective `x` prefixes under `irix-ksh`; its
   native `test` also misinterprets values such as `!` and `(` as operators.
 

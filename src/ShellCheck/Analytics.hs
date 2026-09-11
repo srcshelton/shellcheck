@@ -5623,6 +5623,22 @@ prop_checkSetESuppressed16 = verifyTree    checkSetESuppressed "set -e; f(){ :; 
 prop_checkSetESuppressed17 = verifyNotTree checkSetESuppressed "set -e; f(){ :; }; g(){ :; }; g f"
 prop_checkSetESuppressed18 = verifyNotTree checkSetESuppressed "set -e; shopt -s inherit_errexit; f(){ :; }; x=$(f)"
 prop_checkSetESuppressed19 = verifyNotTree checkSetESuppressed "set -e; set -o posix; f(){ :; }; x=$(f)"
+prop_checkSetESuppressedIrixSh = verifyNotTree checkSetESuppressed
+    "# shellcheck shell=irix-sh\nset -e; probe(){ false; echo survived; }; value=`probe`; echo \"after:<$value>\""
+prop_checkSetESuppressedIrixKsh = verifyNotTree checkSetESuppressed
+    "# shellcheck shell=irix-ksh\nset -e; probe(){ false; echo survived; }; value=`probe`; echo \"after:<$value>\""
+prop_checkSetESuppressedIrixKshDollar = verifyNotTree checkSetESuppressed
+    "# shellcheck shell=irix-ksh\nset -e; probe(){ false; echo survived; }; value=$(probe); echo \"after:<$value>\""
+prop_checkSetESuppressedIrixQuoted = all (verifyNotTree checkSetESuppressed)
+    [ "# shellcheck shell=" ++ shell ++ "\nset -e; f(){ :; }; x=\"" ++ substitution ++ "\""
+    | (shell, substitution) <- [("irix-sh", "`f`"), ("irix-ksh", "`f`"), ("irix-ksh", "$(f)")]
+    ]
+prop_checkSetESuppressedIrixConditionals = all (verifyTree checkSetESuppressed)
+    [ "# shellcheck shell=" ++ shell ++ "\nset -e; f(){ :; }; " ++ invocation
+    | shell <- ["irix-sh", "irix-ksh"]
+    , invocation <- ["f && echo ok", "f || echo failed", "! f",
+        "if f; then :; fi", "while f; do :; done", "until f; do :; done"]
+    ]
 checkSetESuppressed params t =
     if hasSetE params then runNodeAnalysis checkNode params t else []
   where

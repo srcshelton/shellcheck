@@ -226,8 +226,8 @@ makeParameters spec = params
                 BusyboxSh -> True
                 Sh   -> True
                 Ksh  -> False
-                IrixSh -> False
-                IrixKsh -> False,
+                IrixSh -> True
+                IrixKsh -> True,
         hasPipefail =
             case shellType params of
                 Bash -> isOptionSet "pipefail" root

@@ -196,6 +196,24 @@ prop_irixProfilesEnableSafetyChecksByDefault = conjoin
         ]
     genericSource = "#!/bin/ksh\n" ++ source
 
+prop_irixInheritsErrexitWithOptionalCheck = all checkProfile ["irix-sh", "irix-ksh"]
+  where
+    checkProfile shell = null $ intersect [2310, 2311] $ checkWithOption
+        "check-set-e-suppressed" ("# shellcheck shell=" ++ shell ++ "\n" ++ source)
+    source = "set -e; probe(){ false; echo survived; }; value=`probe`; echo \"after:<$value>\""
+
+prop_irixStillChecksConditionalErrexit = all checkProfile ["irix-sh", "irix-ksh"]
+  where
+    checkProfile shell = [2310] == (intersect [2310, 2311] $ check
+        ("# shellcheck shell=" ++ shell ++ " enable=check-set-e-suppressed\n" ++ source))
+    source = "set -e; probe(){ false; echo survived; }; if probe; then echo after; fi"
+
+prop_irixErrexitWorkaroundBecomesUnused = all checkProfile ["irix-sh", "irix-ksh"]
+  where
+    checkProfile shell = [2337] == (intersect [2311, 2337] $ check
+        ("# shellcheck shell=" ++ shell ++ " enable=check-set-e-suppressed\n" ++ source))
+    source = "set -e\nf(){ :; }\n# shellcheck disable=SC2311\nx=`f`\necho \"$x\""
+
 prop_forkOptionalsUseExpectedSeverity = all hasExpectedSeverity cases
   where
     hasExpectedSeverity (option, code, severity, source) =
