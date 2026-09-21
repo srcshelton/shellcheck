@@ -53,6 +53,7 @@ import Debug.Trace -- STRIP
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map.Strict as Map
 import qualified Data.Set as S
+import qualified Data.Graph.Inductive.Graph as G
 import Test.QuickCheck.All (forAllProperties)
 import Test.QuickCheck (conjoin, counterexample)
 import Test.QuickCheck.Test (quickCheckWithResult, stdArgs, maxSuccess)
@@ -73,6 +74,7 @@ treeChecks = [
     ,checkUncheckedCdPushdPopd
     ,checkArrayAssignmentIndices
     ,checkUseBeforeDefinition
+    ,checkIrixExitTrapScope
     ,checkAliasUsedInSameParsingUnit
     ,checkArrayValueUsedAsIndex
     ]
@@ -2239,36 +2241,88 @@ prop_subshellAssignmentCheck22 = verifyNotTree subshellAssignmentCheck "( [[ -n 
 prop_subshellAssignmentCheck23 = verifyNotTree subshellAssignmentCheck "( export foo ); echo $foo"
 prop_subshellAssignmentCheck24 = verifyNotTree subshellAssignmentCheck "( read -r a _ c <<< 'x y z'; ); echo $_"
 prop_subshellAssignmentCheck25 = verifyNotTree subshellAssignmentCheck "( _=discard; ); echo $_"
+prop_subshellAssignmentLocalBindings = conjoin
+    [ counterexample source $ verifyNotTree subshellAssignmentCheck source
+    | source <-
+        [ "first() ( typeset n; n=one; echo \"$n\"; ); second() { typeset n; n=two n=\"$n\"; }; first; second"
+        , "first() ( local n=one; ); second() { local n; echo \"$n\"; }"
+        , "first() ( typeset n=one; ); echo \"$n\""
+        , "f() { ( local n=one; ); local n; echo \"$n\"; }"
+        , "f() { local n=outer; ( local n=inner; ); n=new; echo \"$n\"; }"
+        ] ]
+prop_subshellAssignmentLocalLoss = conjoin
+    [ counterexample source $ verifyTree subshellAssignmentCheck source
+    | source <-
+        [ "f() { local n=outer; ( n=inner; ); echo \"$n\"; }"
+        , "f() { typeset n; ( read n; ); echo \"$n\"; }"
+        , "f() { local n=outer; ( n=inner; ); local n; echo \"$n\"; }"
+        , "first() ( n=one; ); second() { echo \"$n\"; }"
+        , "f() { local n; ( declare -g n=inner; ); }; echo \"$n\""
+        , "( export n=one; ); echo \"$n\""
+        , "( f() { n=one; }; f ); echo \"$n\""
+        ] ]
 subshellAssignmentCheck params t =
-    let flow = variableFlow params
-        check = findSubshelled flow [("oops",[])] Map.empty
+    let scopeFor p token = case token of
+            T_Function id _ _ _ _ -> FunctionScope id
+            _ -> leadType p token
+        flow = getVariableFlowWith scopeFor params t
+        check = findSubshelled flow [(Nothing, [], Map.empty, Nothing)] Map.empty Map.empty Nothing
     in execWriter check
 
 
-findSubshelled [] _ _ = return ()
-findSubshelled (Assignment x@(_, _, str, data_):rest) scopes@((reason,scope):restscope) deadVars =
+-- Keys distinguish a function-local binding from the global with the same
+-- spelling. Subshells inherit bindings, but declarations inside them do not
+-- leak out. Function boundaries are requested only by this diagnostic.
+findSubshelled [] _ _ _ _ = return ()
+findSubshelled (Assignment (base, token, str, data_):rest)
+        scopes@((reason,scope,savedBindings,savedFunction):restscope) deadVars bindings function =
     if isTrueAssignmentSource data_
-    then findSubshelled rest ((reason, x:scope):restscope) $ Map.insert str Alive deadVars
-    else findSubshelled rest scopes deadVars
+    then findSubshelled rest ((reason, (key,token):scope,savedBindings,savedFunction):restscope)
+        (Map.insert key Alive deadVars') bindings' function
+    else findSubshelled rest scopes deadVars' bindings' function
+  where
+    declaration = getCommandName base `elem` map Just ["local", "declare", "typeset"]
+    global = declaration && "g" `elem` map snd (getAllFlags base)
+    bindings' =
+        if isJust function && declaration && not global
+        then Map.insert str function bindings
+        else bindings
+    key = (if global then Nothing else Map.findWithDefault Nothing str bindings', str)
+    deadVars' =
+        if declaration && not global && isJust function
+            && Map.lookup str bindings /= Just function
+        then Map.delete key deadVars
+        else deadVars
 
-findSubshelled (Reference (_, readToken, str):rest) scopes deadVars = do
-    unless (shouldIgnore str) $ case Map.findWithDefault Alive str deadVars of
+findSubshelled (Reference (_, readToken, str):rest) scopes deadVars bindings function = do
+    unless (shouldIgnore str) $ case Map.findWithDefault Alive (Map.findWithDefault Nothing str bindings, str) deadVars of
         Alive -> return ()
         Dead writeToken reason -> do
                     info (getId writeToken) 2030 $ "Modification of " ++ str ++ " is local (to subshell caused by "++ reason ++")."
                     info (getId readToken) 2031 $ str ++ " was modified in a subshell. That change might be lost."
-    findSubshelled rest scopes deadVars
+    findSubshelled rest scopes deadVars bindings function
   where
     shouldIgnore str =
         str `elem` ["@", "*", "_", "IFS"]
 
-findSubshelled (StackScope (SubshellScope reason):rest) scopes deadVars =
-    findSubshelled rest ((reason,[]):scopes) deadVars
+findSubshelled (StackScope (SubshellScope reason):rest) scopes deadVars bindings function =
+    findSubshelled rest ((Just reason,[],bindings,function):scopes) deadVars bindings function
 
-findSubshelled (StackScopeEnd:rest) ((reason, scope):oldScopes) deadVars =
-    findSubshelled rest oldScopes $
-        foldl (\m (_, token, var, _) ->
-            Map.insert var (Dead token reason) m) deadVars scope
+findSubshelled (StackScope (FunctionScope id):rest) scopes deadVars bindings function =
+    findSubshelled rest ((Nothing,[],bindings,function):scopes) deadVars Map.empty (Just id)
+
+findSubshelled (StackScopeEnd:rest) ((reason, scope,bindings,function):oldScopes) deadVars _ _ =
+    findSubshelled rest outerScopes deadVars' bindings function
+  where
+    -- Keep the legacy handling of global writes in functions declared inside
+    -- a subshell. Only function-local writes stop at this added boundary.
+    outerScopes = case (reason, oldScopes) of
+        (Nothing, (why,writes,bs,fn):remaining) ->
+            (why, filter (isNothing . fst . fst) scope ++ writes, bs, fn):remaining
+        _ -> oldScopes
+    deadVars' = case reason of
+        Nothing -> deadVars
+        Just why -> foldl (\m (key, token) -> Map.insert key (Dead token why) m) deadVars scope
 
 
 -- FIXME: This is a very strange way of doing it.
@@ -4656,6 +4710,25 @@ prop_checkUseBeforeDefinition5 = verifyTree checkUseBeforeDefinition "false || m
 prop_checkUseBeforeDefinition6 = verifyNotTree checkUseBeforeDefinition "f() { one; }; f; f() { two; }; f"
 prop_checkUseBeforeDefinition7 = verifyNotTree checkUseBeforeDefinition "f() { :; }; f | cat"
 prop_checkUseBeforeDefinition8 = verifyNotTree checkUseBeforeDefinition "f() { :; }; printf '%s\\n' value | while read -r line; do f; done"
+prop_checkUseBeforeDefinitionTerminalBranch = conjoin
+    [ counterexample source $ verifyTree checkUseBeforeDefinition source
+    | source <-
+        [ "if [ -z \"$1\" ]; then usage; exit 1; fi; usage() { :; }"
+        , "case $1 in bad) usage; exit 1;; esac; usage() { :; }"
+        , "if [ -z \"$1\" ]; then usage; return 1; fi; usage() { :; }"
+        , ". ./helpers; if [ -z \"$1\" ]; then usage; exit 1; fi; usage() { :; }"
+        , "eval \"$definitions\"; if [ -z \"$1\" ]; then usage; exit 1; fi; usage() { :; }"
+        ] ]
+prop_checkUseBeforeDefinitionBoundaries = conjoin
+    [ counterexample source $ verifyNotTree checkUseBeforeDefinition source
+    | source <-
+        [ "if ! usage --version; then exit 1; fi; usage() { :; }"
+        , "usage || exit 1; usage() { :; }"
+        , "if [ -n \"$1\" ]; then usage() { :; }; usage; exit 1; fi; usage() { :; }"
+        , "usage() { :; }; if [ -z \"$1\" ]; then usage; exit 1; fi; usage() { :; }"
+        , "f() { usage; exit 1; }; usage() { :; }; f"
+        , "if [ -z \"$1\" ]; then echo bad; exit 1; fi; echo() { :; }"
+        ] ]
 checkUseBeforeDefinition :: Parameters -> Token -> [TokenComment]
 checkUseBeforeDefinition params t = fromMaybe [] $ do
     cfga <- cfgAnalysis params
@@ -4675,11 +4748,303 @@ checkUseBeforeDefinition params t = fromMaybe [] $ do
                 name <- getLiteralString cmd
                 invocations <- Map.lookup name funcs
                 -- Is the function definitely being defined later?
-                guard $ any (\c -> CF.doesPostDominate cfga c id) invocations
+                let definedLater = any (\c -> CF.doesPostDominate cfga c id) invocations
+                guard $ definedLater || terminalForwardCall cfga name t invocations
                 -- Was one already defined, so it's actually a re-definition?
                 guard . not $ any (\c -> CF.doesPostDominate cfga id c) invocations
-                return $ err id 2218 "This function is only defined later. Move the definition up."
+                return $ if definedLater
+                    then err id 2218 "This function is only defined later. Move the definition up."
+                    else warn id 2218 "This call precedes the function definition below. Move the definition up if this call should use it."
             _ -> return ()
+
+    -- A terminating error branch need not reach the later definition. Extend
+    -- the old rule only for a source-local call before an unconditional
+    -- top-level definition. Keep status probes, known earlier definitions,
+    -- functions (whose call time differs from textual order), and possible
+    -- earlier definitions out of this additional check. Runtime-loaded or
+    -- external commands can still exist, so the new message describes source
+    -- order and makes the intended binding explicit instead of asserting
+    -- that the command must be undefined.
+    terminalForwardCall cfga name call definitions =
+        maybe False CF.stateIsReachable (CF.getIncomingState cfga $ getId call)
+        && not (isCondition $ getPath (parentMap params) call)
+        && not (any isFunction $ NE.toList $ getPath (parentMap params) call)
+        && name `notElem` commonCommands
+        && not (any possiblyEarlier definitions)
+        && any laterTopLevel definitions
+      where
+        possiblyEarlier id = fromMaybe True $ do
+            definition <- Map.lookup id $ idMap params
+            (pa, _) <- Map.lookup id $ tokenPositions params
+            (pb, _) <- Map.lookup (getId call) $ tokenPositions params
+            return $ posFile pa /= posFile pb || sourceBefore definition call
+        laterTopLevel id = fromMaybe False $ do
+            definition <- Map.lookup id $ idMap params
+            return $ sourceBefore call definition && topLevel definition
+
+    sourceBefore a b = fromMaybe False $ do
+        (pa, _) <- Map.lookup (getId a) $ tokenPositions params
+        (pb, _) <- Map.lookup (getId b) $ tokenPositions params
+        return $ posFile pa == posFile pb && pa < pb
+
+    topLevel token = all transparent $ NE.tail $ getPath (parentMap params) token
+    transparent T_Script{} = True
+    transparent T_Annotation{} = True
+    transparent T_Redirecting{} = True
+    transparent (T_Pipeline _ _ [_]) = True
+    transparent _ = False
+
+-- Read-only, intra-procedural CFG proofs. Ignore false/exit edges and require
+-- an actual entry path, so unreachable components never prove dominance.
+flowAncestors cfga blocked id = fromMaybe S.empty $ do
+    (start, _) <- Map.lookup id $ CF.tokenToRange cfga
+    return $ visit S.empty [start]
+  where
+    predecessors = Map.fromListWith (++)
+        [(to,[from]) | (from,to,CFEFlow) <- G.labEdges $ CF.graph cfga]
+    visit seen [] = seen
+    visit seen (node:rest)
+        | Just node == blocked || S.member node seen = visit seen rest
+        | otherwise = visit (S.insert node seen) $
+            Map.findWithDefault [] node predecessors ++ rest
+
+flowDominates cfga target base = fromMaybe False $ do
+    (_, end) <- Map.lookup target $ CF.tokenToRange cfga
+    let entries = S.fromList [n | (n,CFEntryPoint _) <- G.labNodes $ CF.graph cfga]
+    return $ not (S.null $ S.intersection entries $ flowAncestors cfga Nothing base)
+        && S.null (S.intersection entries $ flowAncestors cfga (Just end) base)
+
+flowMayPrecede cfga target base = fromMaybe False $ do
+    (_, end) <- Map.lookup target $ CF.tokenToRange cfga
+    return $ S.member end $ flowAncestors cfga Nothing base
+
+-- This is deliberately a proof of a narrow IRIX hazard, not a second shell
+-- interpreter. Unknown actions, ambiguous helper definitions/call contexts,
+-- trap-changing calls, recursion and scope-changing subshells are declined.
+-- No shared CFG transfer rules or other trap diagnostics are changed.
+prop_checkIrixExitTrapScopePositive = conjoin
+    [ counterexample (shell ++ ": " ++ source) $
+        verifyTree checkIrixExitTrapScope ("# shellcheck shell=" ++ shell ++ "\n" ++ source)
+    | shell <- ["irix-sh", "irix-ksh"]
+    , source <-
+        [ "value=outer; f() { typeset value=inner; trap 'echo \"$value\"' 0; exit 1; }; f"
+        , "function f { typeset value=inner; trap 'echo \"$value\"' EXIT; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'if test -n \"$1\"; then value=safe; fi; echo \"$value\"' 0; exit 1; }; f"
+        , "cleanup() { echo \"$value\"; }; f() { typeset value=inner; trap cleanup 0; exit 1; }; f"
+        , "cleanup() { echo \"$value\"; }; relay() { cleanup; }; f() { typeset value=inner; trap relay 0; exit 1; }; f"
+        , "cleanup() { echo \"$value\"; }; trap cleanup 0; f() { typeset value=inner; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'echo \"$value\"' 0; if test -n \"$1\"; then exit 1; fi; }; f"
+        , "f() { typeset value=inner; trap - 0; trap 'echo \"$value\"' 0; exit 1; }; f"
+        ] ]
+prop_checkIrixExitTrapScopeNegative = conjoin
+    [ counterexample source $ verifyNotTree checkIrixExitTrapScope
+        ("# shellcheck shell=irix-sh\n" ++ source)
+    | source <-
+        [ "f() { value=inner; trap 'echo \"$value\"' 0; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'echo \"$value\"' TERM; exit 1; }; f"
+        , "f() { typeset value=inner; trap \"echo $value\" 0; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'value=safe; echo \"$value\"' 0; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'echo \"$value\"' 0; trap - 0; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'echo \"$value\"' 0; trap 'echo safe' 0; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'echo \"$value\"' 0; if test -n \"$1\"; then trap - 0; fi; exit 1; }; f"
+        , "f() { if test -n \"$1\"; then typeset value=inner; fi; trap 'echo \"$value\"' 0; exit 1; }; f"
+        , "cleanup() { typeset value=safe; echo \"$value\"; }; f() { typeset value=inner; trap cleanup 0; exit 1; }; f"
+        , "cleanup() { value=safe; echo \"$value\"; }; f() { typeset value=inner; trap cleanup 0; exit 1; }; f"
+        , "cleanup() { echo \"$value\"; }; f() { typeset value=inner; cleanup; exit 1; }; f"
+        , "f() { typeset value=inner; trap \"$action\" 0; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'echo \"$value\"' 0; eval \"$action\"; exit 1; }; f"
+        , "cleanup() { cleanup; }; f() { typeset value=inner; trap cleanup 0; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'echo \"$value\"' 0; unset value; exit 1; }; f"
+        , "trap 'echo \"$value\"' 0; f() { typeset value=inner; exit 1; }; if test -n \"$1\"; then trap - 0; fi; f"
+        , "f() { typeset value=inner; trap 'echo \"$value\"' 0; ( exit 1 ); }; f"
+        , "f() { typeset value=inner; trap '$handler; echo \"$value\"' 0; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'eval \"$handler\"; echo \"$value\"' 0; exit 1; }; f"
+        , ". ./helpers; f() { typeset value=inner; trap 'echo \"$value\"' 0; exit 1; }; f"
+        , "cleanup() { echo \"$value\"; }; f() { typeset value=inner; trap 'exit; cleanup' 0; exit 1; }; f"
+        , "stop() { exit; }; cleanup() { echo \"$value\"; }; f() { typeset value=inner; trap 'stop; cleanup' 0; exit 1; }; f"
+        , "cleanup() { echo \"$value\"; }; f() { typeset value=inner; trap 'command cleanup' 0; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'echo \"$value\"' 0; exec exit 1; }; f"
+        , "trap() { :; }; f() { typeset value=inner; trap 'echo \"$value\"' 0; exit 1; }; f"
+        , "f() { typeset value=inner; trap 'unset value; echo \"$value\"' 0; exit 1; }; f"
+        ] ]
+prop_checkIrixExitTrapScopeOtherShells = conjoin
+    [ counterexample shell $ verifyNotTree checkIrixExitTrapScope $
+        "# shellcheck shell=" ++ shell ++ "\nf() { typeset value=inner; trap 'echo \"$value\"' 0; exit 1; }; f"
+    | shell <- ["sh", "bash", "dash", "busybox", "ksh", "irix-bsh", "irix-jsh"] ]
+
+checkIrixExitTrapScope params root
+    | shellType params `notElem` [IrixSh, IrixKsh] = []
+    | otherwise = fromMaybe [] $ do
+        cfga <- cfgAnalysis params
+        guard $ not $ any (`Map.member` functions) ["exit", "trap", "typeset", "local", "declare"]
+        guard $ not $ any (\c -> getCommandName c `elem` map Just ["eval", ".", "source"]) commands
+        return $ execWriter $ mapM_ (checkExit cfga) commands
+  where
+    tokens = Map.elems $ idMap params
+    commands = [t | t@T_SimpleCommand{} <- tokens]
+    functions = Map.fromListWith (++)
+        [(name,[t]) | t@(T_Function _ _ _ name _) <- tokens]
+    owner token = listToMaybe
+        [f | f@T_Function{} <- NE.tail $ getPath (parentMap params) token]
+    ownerId = fmap getId . owner
+    inSubshell token = any isSubshell $ takeWhile (not . isFunction) $
+        NE.tail $ getPath (parentMap params) token
+    isSubshell token = case leadType params token of
+        SubshellScope _ -> True
+        _ -> False
+    sameOwner a b = ownerId a == ownerId b
+    directName = fst . getCommandNameAndToken True
+
+    -- Nothing means the trap may modify EXIT but its action is not known.
+    exitTrap token = case getCommandArgv token of
+        Just (cmd:args) | getLiteralString cmd == Just "trap" ->
+            case args of
+                [] -> (False, Nothing)
+                action:signals ->
+                    let names = map getLiteralString signals
+                        affectsExit = any (`elem` [Just "EXIT", Just "0", Nothing]) names
+                        code = getLiteralStringDef ":" action
+                    in (affectsExit, if affectsExit && isJust (getLiteralString action) && code `notElem` ["", "-"]
+                        && all isJust names then Just action else Nothing)
+        _ -> (False, Nothing)
+
+    mutatesTrap token = fst (exitTrap token)
+        || getCommandName token `elem` map Just ["eval", ".", "source"]
+        || case token of
+            T_SimpleCommand _ _ [] -> False
+            _ -> maybe True (`Map.member` functions) (getCommandName token)
+
+    activeTrap cfga point = listToMaybe
+        [ (command, action)
+        | command <- commands, sameOwner command point, not (inSubshell command)
+        , Just action <- [snd $ exitTrap command]
+        , flowDominates cfga (getId command) (getId point)
+        , not $ any (intervenes command) commands
+        ]
+      where
+        intervenes installed other =
+            getId other /= getId installed && getId other /= getId point
+            && sameOwner other point && not (inSubshell other) && mutatesTrap other
+            && flowMayPrecede cfga (getId installed) (getId other)
+            && flowMayPrecede cfga (getId other) (getId point)
+
+    callSites function = case function of
+        T_Function _ _ _ name _ ->
+            [c | c <- commands, getCommandName c == Just name]
+        _ -> []
+
+    actionAtExit cfga function point =
+        activeTrap cfga point `mplus` inherited
+      where
+        calls = callSites function
+        inherited = do
+            guard $ not $ null calls
+            guard $ all (isNothing . owner) calls
+            guard $ all (not . inSubshell) calls
+            guard $ not $ any (\c -> sameOwner c point && not (inSubshell c)
+                && mutatesTrap c && flowMayPrecede cfga (getId c) (getId point)) commands
+            actions <- mapM (activeTrap cfga) calls
+            first <- listToMaybe actions
+            guard $ all ((== getId (fst first)) . getId . fst) actions
+            return first
+
+    checkExit cfga point = sequence_ $ do
+        guard $ directName point == Just "exit" && not (inSubshell point)
+        state <- CF.getIncomingState cfga $ getId point
+        guard $ CF.stateIsReachable state
+        function <- owner point
+        (_, action) <- actionAtExit cfga function point
+        references <- actionReferences cfga function point action
+        let locals = nub
+                [ name
+                | declaration <- commands, sameOwner declaration point
+                , not (inSubshell declaration)
+                , directName declaration `elem` map Just ["typeset", "local", "declare"]
+                , not $ any (`elem` map snd (getAllFlags declaration)) ["g", "n"]
+                , flowDominates cfga (getId declaration) (getId point)
+                , (_,_,name,_) <- getModifiedVariables params declaration
+                , name `elem` references
+                , not $ any (unsets name) commands
+                ]
+            unsets name command =
+                sameOwner command point && getCommandName command == Just "unset"
+                && name `elem` mapMaybe getLiteralString (arguments command)
+                && flowMayPrecede cfga (getId command) (getId point)
+        guard $ not $ null locals
+        return $ warn (getId point) 2349 $
+            "On IRIX, EXIT traps run after this function's locals are gone: "
+            ++ intercalate ", " locals ++ ". The trap may read outer or unset values. "
+            ++ "Clean up before exiting or use deliberately persistent state."
+
+    -- Analyze the static action together with just its available, uniquely
+    -- defined helpers in a fresh environment. This reuses the existing DFA
+    -- for trap-local assignments/branches instead of changing its semantics.
+    actionReferences cfga function point action = do
+        source <- getLiteralString action
+        let parsed = runIdentity $ parseScript (mockedSystemInterface []) newParseSpec {
+                psFilename = "EXIT action", psScript = source,
+                psIgnoreRC = True, psShellTypeOverride = Just (shellType params)
+            }
+        guard $ null $ prComments parsed
+        script <- prRoot parsed
+        helpers <- helperClosure S.empty script
+        let Id maximumId = maximum $ Map.keys $ idMap params
+            shifted = doTransform (\(OuterToken (Id n) inner) ->
+                OuterToken (Id $ n + maximumId + 1) inner) script
+            prepend (T_Script id bang body) = T_Script id bang (helpers ++ body)
+            prepend token = token
+            combined = doTransform prepend shifted
+        let isolated = makeParameters $ (newAnalysisSpec combined) {
+                asShellType = Just (shellType params), asExecutionMode = Executed
+            }
+        analysis <- cfgAnalysis isolated
+        let parts = Map.elems $ idMap isolated
+            functionId token = listToMaybe
+                [getId f | f@T_Function{} <- NE.tail $ getPath (parentMap isolated) token]
+            reachable token = maybe False CF.stateIsReachable $
+                CF.getIncomingState analysis $ getId token
+            helperNames = Map.fromList [(name,id) | T_Function id _ _ name _ <- helpers]
+            callsFrom scope =
+                [id | c@T_SimpleCommand{} <- parts, functionId c == scope, reachable c
+                , Just name <- [directName c], Just id <- [Map.lookup name helperNames]]
+            visit seen [] = seen
+            visit seen (id:rest)
+                | S.member id seen = visit seen rest
+                | otherwise = visit (S.insert id seen) (callsFrom (Just id) ++ rest)
+            invoked = visit S.empty $ callsFrom Nothing
+        return $ nub
+            [ name
+            | Reference (_,token,name) <- variableFlow isolated
+            , maybe True (`S.member` invoked) (functionId token)
+            , Just state <- [CF.getIncomingState analysis $ getId token]
+            , CF.stateIsReachable state, CF.variableMayBeUnset state name
+            ]
+      where
+        helperClosure visited body = do
+            guard $ S.size visited < 8
+            let parts = Map.elems $ getTokenMap body
+                calls = [c | c@T_SimpleCommand{} <- parts]
+            guard $ not $ any isFunction parts
+            guard $ all (\c -> (isJust (directName c) || assignmentOnly c)
+                && directName c `notElem` map Just
+                    ["eval", ".", "source", "trap", "unset", "command", "builtin", "exec", "run", "busybox"]) calls
+            fmap (nubBy ((==) `on` getId) . concat) $ forM
+                (nub $ mapMaybe getCommandName calls) $ \name ->
+                    case Map.lookup name functions of
+                        Nothing -> return []
+                        Just [helper@(T_Function id _ _ _ helperBody)] -> do
+                            guard $ not $ S.member id visited
+                            guard $ available helper
+                            children <- helperClosure (S.insert id visited) helperBody
+                            return $ helper : children
+                        _ -> Nothing
+        assignmentOnly (T_SimpleCommand _ _ []) = True
+        assignmentOnly _ = False
+        available helper =
+            flowDominates cfga (getId helper) (getId point)
+            || (isNothing (owner helper) && not (null $ callSites function)
+                && all (\call -> isNothing (owner call)
+                    && flowDominates cfga (getId helper) (getId call)) (callSites function))
 
 prop_checkForLoopGlobVariables1 = verify checkForLoopGlobVariables "for i in $var/*.txt; do true; done"
 prop_checkForLoopGlobVariables2 = verifyNot checkForLoopGlobVariables "for i in \"$var\"/*.txt; do true; done"

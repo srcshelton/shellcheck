@@ -1,0 +1,51 @@
+#!/usr/local/bin/bash
+# Bounded native language evidence, not a ShellCheck binary qualification.
+set -euo pipefail
+test "$(uname -s)" = IRIX || test "$(uname -s)" = IRIX64
+test "$(id -u)" -ne 0 || { echo 'Run as an unprivileged user' >&2; exit 2; }
+parent=${IRIX_TEST_PARENT:?Set a private durable session test parent}
+test -d "$parent"
+free=$(df -k "$parent" | tail -1 | awk '{print $(NF-2)}')
+test "$free" -ge 530432
+fixture="$parent/exit-trap-scope-$$"
+mkdir "$fixture"
+PATH=/usr/bin:/bin:/usr/sbin:/sbin
+export PATH
+count=0
+for shell in /sbin/sh /bin/ksh; do
+    for form in ordinary keyword; do
+        case "$form" in ordinary) definition='f()' ;; keyword) definition='function f' ;; esac
+        for scenario in inline helper inherited unset direct; do
+            setup='value=outer;'
+            expected=outer
+            helper='cleanup() { print -r -- "${value-UNSET}"; };'
+            prefix=
+            case "$scenario" in
+                inline) body="trap 'print -r -- \"\${value-UNSET}\"' 0;" ;;
+                helper) body='trap cleanup 0;' ;;
+                inherited) prefix='trap cleanup 0;'; body= ;;
+                unset) setup='unset value;'; body='trap cleanup 0;'; expected=UNSET ;;
+                direct) body='cleanup;'; expected=inner ;;
+            esac
+            source="$setup $helper $prefix $definition { typeset value=inner; $body exit 1; }; f"
+            stem="$fixture/${shell##*/}.$form.$scenario"
+            printf '%s\n' "$source" > "$stem.sh"
+            printf '%s\n' "$expected" > "$stem.expected"
+            for mode in command file stdin; do
+                status=0
+                case "$mode" in
+                    command) "$shell" -c "$source" > "$stem.$mode.out" 2> "$stem.$mode.err" || status=$? ;;
+                    file) "$shell" "$stem.sh" > "$stem.$mode.out" 2> "$stem.$mode.err" || status=$? ;;
+                    stdin) "$shell" < "$stem.sh" > "$stem.$mode.out" 2> "$stem.$mode.err" || status=$? ;;
+                esac
+                printf '%s\n' "$status" > "$stem.$mode.status"
+                test "$status" = 1
+                test ! -s "$stem.$mode.err"
+                cmp "$stem.expected" "$stem.$mode.out"
+                count=$((count+1))
+                printf 'PASS %s %s %s %s\n' "$shell" "$form" "$scenario" "$mode"
+            done
+        done
+    done
+done
+printf 'PASS %s native EXIT/local lifetime contracts; retained %s\n' "$count" "$fixture"

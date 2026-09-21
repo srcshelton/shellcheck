@@ -1,5 +1,8 @@
 ## Unreleased
 ### Added
+- SC2349: conservative IRIX sh/ksh warning when a delayed EXIT action may read
+  outer or unset values after an explicitly exiting function's locals unwind.
+  Accounts for static cleanup helpers and assignments; offers no autofix.
 - Native-validated `irix-bsh` and `irix-jsh` aliases for IRIX's older Bourne
   shell, including its non-POSIX substitutions, read/export/test restrictions,
   pipeline scope and brace-form case syntax. Avoid incompatible POSIX advice.
@@ -9,6 +12,10 @@
   profiles; native shells require `base#digits`, such as `16#1a`.
 
 ### Fixed
+- SC2030/SC2031 distinguish independent function-local bindings with the same
+  name while retaining warnings for genuine writes lost across subshells.
+- SC2218 detects top-level forward calls in terminating error branches,
+  preserving status-probe and redefinition exceptions.
 - SC2218 no longer reports definitions after unreachable calls with older fgl
   versions; postdominators are computed only for nodes that can reach the exit.
 - SC2340 no longer recommends quoting active bracket syntax in dynamic

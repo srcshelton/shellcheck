@@ -114,7 +114,7 @@ data Parameters = Parameters {
 -- TODO: Cache results of common AST ops here
 data Cache = Cache {}
 
-data Scope = SubshellScope String | NoneScope deriving (Show, Eq)
+data Scope = SubshellScope String | FunctionScope Id | NoneScope deriving (Show, Eq)
 data StackData =
     StackScope Scope
     | StackScopeEnd
@@ -501,17 +501,21 @@ tokenIsJustCommandOutput t = case t of
     check _   = False
 
 -- TODO: Replace this with a proper Control Flow Graph
-getVariableFlow params t =
+getVariableFlow = getVariableFlowWith leadType
+
+-- A diagnostic may request additional lexical boundaries without changing
+-- the legacy flow seen by other checks.
+getVariableFlowWith scopeFor params t =
     reverse $ execState (doStackAnalysis startScope endScope t) []
   where
     startScope t =
-        let scopeType = leadType params t
+        let scopeType = scopeFor params t
         in do
             when (scopeType /= NoneScope) $ modify (StackScope scopeType:)
             when (assignFirst t) $ setWritten t
 
     endScope t =
-        let scopeType = leadType params t
+        let scopeType = scopeFor params t
         in do
             setRead t
             unless (assignFirst t) $ setWritten t

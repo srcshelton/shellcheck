@@ -1,0 +1,73 @@
+#!/usr/bin/env python3
+"""Focused diagnostic CLI contracts; pass the freshly built host executable."""
+import json
+import subprocess
+import sys
+
+binary = sys.argv[1]
+checks = 0
+
+
+def comments(source, shell, *options):
+    global checks
+    result = subprocess.run(
+        [binary, "--norc", "--format=json1", "--shell=" + shell, *options, "-"],
+        input=source, text=True, capture_output=True, check=False)
+    assert result.returncode in (0, 1), (result.returncode, result.stderr)
+    assert not result.stderr, result.stderr
+    checks += 1
+    return json.loads(result.stdout)["comments"]
+
+
+scoped = '''first() (
+    typeset number
+    number=one
+    number="${number}x"
+    print -r -- "$number"
+)
+second() {
+    typeset number
+    number=two number="${number}y"
+    print -r -- "$number"
+}
+first
+second
+'''
+hazard = '''value=outer
+run() {
+    typeset value=inner
+    trap 'print -r -- "EXIT scope: ${value}"' 0
+    exit 1
+}
+run
+'''
+forward = 'if [ -z "$1" ]; then usage; exit 1; fi\nusage() { :; }\n'
+
+for shell in ("irix-sh", "irix-ksh"):
+    assert not comments(scoped, shell, "--include=SC2030,SC2031")
+    loss = comments('f() { typeset n=outer; ( n=inner ); print -r -- "$n"; }; f',
+                    shell, "--include=SC2030,SC2031")
+    assert {c["code"] for c in loss} == {2030, 2031}
+    forward_comments = comments(forward, shell, "--include=SC2218")
+    assert {c["code"] for c in forward_comments} == {2218}
+    assert forward_comments[0]["level"] == "warning"
+    assert "if this call should use it" in forward_comments[0]["message"]
+    assert not comments(forward, shell, "--include=SC2218", "--severity=error")
+    assert comments('usage; usage() { :; }', shell, "--include=SC2218")[0]["level"] == "error"
+    assert not comments('if ! usage; then exit 1; fi; usage() { :; }', shell,
+                        "--include=SC2218")
+    trap = comments(hazard, shell, "--include=SC2349")
+    assert len(trap) == 1 and trap[0]["code"] == 2349 and trap[0]["line"] == 5
+    assert trap[0].get("fix") is None
+    assert 2349 not in {c["code"] for c in comments(hazard, shell, "--exclude=SC2349")}
+    suppressed = hazard.replace("    exit 1", "    # shellcheck disable=SC2349\n    exit 1")
+    assert not comments(suppressed, shell, "--include=SC2349")
+    assert not comments(hazard, shell, "--include=SC2349", "--extended-analysis=false")
+    assert not comments(hazard.replace("trap 'print", "trap 'value=safe; print"),
+                        shell, "--include=SC2349")
+    assert not comments(hazard.replace(" 0\n", " TERM\n"), shell, "--include=SC2349")
+
+for shell in ("sh", "bash", "dash", "busybox", "ksh", "irix-bsh", "irix-jsh"):
+    assert not comments(hazard, shell, "--include=SC2349")
+
+print(f"PASS {checks} deferred-diagnostic CLI, suppression and profile contracts")
