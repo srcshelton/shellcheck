@@ -1577,6 +1577,13 @@ findTerminalNodes graph = ufold find [] graph
     f (IdTagged _ (CFDefineFunction _ id start end):rest) list = f rest (end:list)
     f (_:rest) list = f rest list
 
+prop_findPostDominators_noExitPath =
+    let graph = mkGraph [(n, CFStructuralNode) | n <- [0..3]]
+                    [(0, 1, CFEFlow), (2, 3, CFEFlow), (3, 2, CFEFlow)]
+        result = findPostDominators 1 graph
+    in sort (result ! 0) == [0, 1] && result ! 1 == [1]
+        && null (result ! 2) && null (result ! 3)
+
 findPostDominators :: Node -> CFGraph -> Array Node [Node]
 findPostDominators mainexit graph = asArray
   where
@@ -1585,7 +1592,12 @@ findPostDominators mainexit graph = asArray
     (incoming, _, label, outgoing) = context graph mainexit
     withExitEdges = (incoming ++ map (\c -> (CFEFlow, c)) terminals, mainexit, label, outgoing) `safeUpdate` inlined
     reversed = grev withExitEdges
-    postDoms = dom reversed mainexit
+    -- Older fgl versions report every node as a dominator of an unreachable
+    -- node; newer versions omit unreachable nodes. Such nodes have no path
+    -- to this exit, so neither result proves that a definition runs later.
+    -- Restrict the graph explicitly, leaving their initialized entries empty.
+    reachesExit = reachable mainexit reversed
+    postDoms = dom (subgraph reachesExit reversed) mainexit
     (_, maxNode) = nodeRange graph
     -- Holes in the array cause "Exception: (Array.!): undefined array element" while
     -- inspecting/debugging, so fill the array first and then update.

@@ -6,6 +6,8 @@
   profiles; native shells require `base#digits`, such as `16#1a`.
 
 ### Fixed
+- SC2218 no longer reports definitions after unreachable calls with older fgl
+  versions; postdominators are computed only for nodes that can reach the exit.
 - SC2340 no longer recommends quoting active bracket syntax in dynamic
   `case` patterns such as `*[${controls}]*`; constant prefixes and suffixes
   remain eligible for the opt-in style check.
