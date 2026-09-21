@@ -1,0 +1,487 @@
+# Sourced selection functions. No compiler/build activity occurs on sourcing.
+# shellcheck shell=bash
+selection_error() { printf 'Compiler selection: %s\n' "$*" >&2; return 2; }
+
+selection_profile() {
+    selected=$1
+    case "$selected" in
+        mipspro)
+            profile=mipspro
+            consumer="$run_root/shellcheck-native-mipspro"
+            expected_profile=fuel-mips4-r14000-n32-mipspro744m-ghc7103-O2-v1 ;;
+        gcc)
+            profile=optimized
+            consumer="$run_root/shellcheck-native-optimized"
+            expected_profile=fuel-mips4-generic-n32-gcc346-ghc7103-O2-v2 ;;
+        *) selection_error 'expected auto, mipspro or gcc'; return 2 ;;
+    esac
+    job="$consumer/job"
+}
+
+selection_compiler() {
+    case "$selected" in mipspro) printf '/bin/cc\n' ;; gcc) printf '/usr/nekoware/bin/gcc\n' ;; esac
+}
+
+selection_version() {
+    case "$selected" in
+        mipspro) "$(selection_compiler)" -version ;;
+        gcc) "$(selection_compiler)" --version ;;
+    esac
+}
+
+# Read checksums as data, never source/eval them. Resolve smoke.hs against its
+# immutable attempt directory; every other gate input must be candidate-private.
+selection_verify_list() {
+    local list=$1 base=$2 sum size path extra actual count=0
+    [ -s "$list" ] || { selection_error "missing checksum manifest: $list"; return 2; }
+    while read -r sum size path extra; do
+        case "$sum:$size" in *[!0-9:]*|:*|*:) return 2 ;; esac
+        [ -n "$path" ] && [ -z "$extra" ] || return 2
+        case "$path" in
+            smoke.hs) path="$base/smoke.hs" ;;
+            "$consumer"/*) ;;
+            *) selection_error "non-private gate input: $path"; return 2 ;;
+        esac
+        case "$path" in *'/../'*|*'/./'*) return 2 ;; esac
+        [ -f "$path" ] || return 2
+        actual=$(cksum "$path") || return "$?"
+        [ "$actual" = "$sum $size $path" ] || {
+            selection_error "gate input changed: $path"; return 2;
+        }
+        count=$((count + 1))
+    done < "$list"
+    [ "$count" -gt 0 ]
+}
+
+selection_exited() {
+    local pid
+    pid=$(cat "$1") || return "$?"
+    case "$pid" in ''|*[!0-9]*) return 2 ;; esac
+    if kill -0 "$pid" 2>/dev/null; then
+        selection_error "process $pid is still present; refusing selection"
+        return 2
+    fi
+}
+
+selection_gate_inputs() {
+    printf '%s\n' native-consumer-profile native-shellcheck-cc native-shellcheck-link build-native-optimized
+    if [ "$selected" = mipspro ]; then
+        printf '%s\n' native-mipspro-cc ghc710-mipspro-hc
+    fi
+}
+
+selection_manifest_has() {
+    awk -v required="$2" 'NF == 3 && $3 == required { found++ } END { exit found != 1 }' "$1"
+}
+
+selection_validate_gates() {
+    local pid name count required
+    [ -x "$(selection_compiler)" ] || { selection_error "$selected is not installed"; return 2; }
+    [ "$(cat "$consumer/build-profile")" = "$expected_profile" ] || return 2
+    [ "$(head -1 "$consumer/optimization-qualified")" = "$expected_profile" ] || return 2
+    [ "$(cat "$job/guest-status")" = 0 ] || return 2
+    [ "$(cat "$job/dependency-c-status")" = 0 ] || return 2
+    selection_exited "$job/native.pid" || return "$?"
+    selection_exited "$job/dependency-c.pid" || return "$?"
+    pid=$(cat "$job/native.pid") || return "$?"
+    suites="$consumer/qualification/$expected_profile/attempt-$pid"
+    ffi=$(cat "$job/dependency-c-current") || return "$?"
+    [ "$ffi" = "$consumer/qualification/dependency-c-$(cat "$job/dependency-c.pid")" ] || return 2
+    [ "$(cat "$ffi/qualified")" = "$expected_profile" ] || return 2
+    [ -x "$ffi/run" ] || return 2
+    for name in runtime clock unix unix-bytestring bytestring-integer; do
+        [ -x "$suites/$name/run" ] || return 2
+        count=$(grep -c "^PASS $name ($expected_profile)$" "$job/artifacts/optimization-qualification.log") || return 2
+        [ "$count" = 1 ] || return 2
+    done
+    for name in primitive-0.6.4.0 text-1.2.3.1 hashable-1.3.0.0 aeson-1.4.7.1; do
+        [ "$(grep -c "^PASS dependency C compile $name$" "$job/dependency-c.log")" = 1 ] || return 2
+    done
+    [ "$(grep -c '^PASS dependency C compile ' "$job/dependency-c.log")" = 4 ] || return 2
+    [ "$(grep -c '^PASS ' "$job/dependency-c.log")" = 14 ] || return 2
+    grep -Fx 'IRIX dependency C/FFI smoke tests passed' "$job/dependency-c.log" >/dev/null || return 2
+    grep -Fx 'PASS representative dependency C/FFI qualification' "$job/dependency-c.log" >/dev/null || return 2
+    selection_verify_list "$job/artifacts/five-suite-inputs.cksum" "$suites" || return "$?"
+    selection_verify_list "$ffi/inputs.cksum" "$ffi" || return "$?"
+    # Prevent a truncated manifest from qualifying only a subset of adapters.
+    while IFS= read -r required; do
+        selection_manifest_has "$job/artifacts/five-suite-inputs.cksum" "$consumer/harness/$required" || return 2
+    done < <(selection_gate_inputs)
+    if [ "$selected" = mipspro ]; then
+        for required in ghc-headers/Stg.h ghc-headers/Rts.h ghc-headers/stg/Regs.h \
+            ghc-headers/rts/storage/Block.h compiler-config/compiler.defaults \
+            compiler-config/gcc-runtime/libgcc.a compiler-config/gcc-runtime/crtbegin.o \
+            compiler-config/gcc-runtime/crtend.o; do
+            selection_manifest_has "$job/artifacts/five-suite-inputs.cksum" "$consumer/$required" || return 2
+        done
+    fi
+    # Selection must precede package state; never adopt a suspended control.
+    if [ "${1-}" != --lowerer-requalification ] && [ "${1-}" != --layout-transport-requalification ]; then
+        [ ! -d "$consumer/package.conf.d" ] || { selection_error 'package database already exists'; return 2; }
+    fi
+    if [ "${1-}" = --layout-transport-requalification ]; then
+        selection_preserved_package "$run_root/shellcheck-native-selection/repair-layout-transport" --before-seal || return "$?"
+    elif [ -d "$consumer/completed" ]; then
+        [ -z "$(ls -A "$consumer/completed")" ] || { selection_error 'completed packages already exist'; return 2; }
+    fi
+}
+
+selection_record_files() {
+    local sum size path extra
+    while read -r sum size path extra; do
+        case "$path" in smoke.hs) path="$ffi/smoke.hs" ;; esac
+        cksum "$path" || return "$?"
+    done < "$job/artifacts/five-suite-inputs.cksum"
+    while read -r sum size path extra; do
+        case "$path" in smoke.hs) path="$ffi/smoke.hs" ;; esac
+        cksum "$path" || return "$?"
+    done < "$ffi/inputs.cksum"
+    cksum "$consumer/build-profile" "$(selection_compiler)" \
+        "$consumer/harness/DependencyCSmoke.hs" "$consumer/harness/qualify-native-dependency-c" || return "$?"
+    local name
+    for name in runtime clock unix unix-bytestring bytestring-integer; do
+        cksum "$suites/$name/run" || return "$?"
+    done
+    cksum "$ffi/run" "$ffi/qualified" || return "$?"
+}
+
+selection_verify_metadata() {
+    local sealed=$1 requested=$2 actual
+    [ -d "$sealed" ] || { selection_error 'no immutable compiler selection'; return 2; }
+    [ -s "$sealed/seal.cksum" ] || { selection_error 'incomplete selection'; return 2; }
+    actual=$(selection_receipt "$sealed") || return "$?"
+    [ "$actual" = "$(cat "$sealed/seal.cksum")" ] || { selection_error 'selection metadata changed'; return 2; }
+    selected=$(cat "$sealed/compiler") || return "$?"
+    case "$requested" in auto|"$selected") ;; *) selection_error 'compiler is already selected; switching is forbidden'; return 2 ;; esac
+    selection_profile "$selected" || return "$?"
+    [ "$(cat "$sealed/profile")" = "$expected_profile" ] || return 2
+}
+
+selection_verify_files() {
+    local sealed=$1 omitted=${2-} omitted_second=${3-} actual sum size path extra
+    # Includes the exact qualified adapters/configuration, C inputs and runs.
+    [ -s "$sealed/files.cksum" ] || return 2
+    while read -r sum size path extra; do
+        [ -z "$extra" ] && [ -f "$path" ] || return 2
+        [ "$path" != "$omitted" ] || continue
+        [ "$path" != "$omitted_second" ] || continue
+        actual=$(cksum "$path") || return "$?"
+        [ "$actual" = "$sum $size $path" ] || { selection_error "sealed input changed: $path"; return 2; }
+    done < "$sealed/files.cksum"
+}
+
+selection_verify_seal() {
+    local sealed=$1 requested=$2 version
+    selection_verify_metadata "$sealed" "$requested" || return "$?"
+    selection_verify_files "$sealed" || return "$?"
+    version=$(selection_version 2>&1) || return "$?"
+    [ "$version" = "$(cat "$sealed/compiler-version.txt")" ] || { selection_error 'compiler version changed'; return 2; }
+    printf '%s\n' "$selected"
+}
+
+selection_receipt() {
+    (
+        cd "$1" || exit "$?"
+        cksum compiler profile requested compiler-version.txt files.cksum \
+            five-suite.log dependency-c.log five-suite-inputs.cksum \
+            dependency-c-inputs.cksum selected-at || exit "$?"
+        if [ -e parent-seal.cksum ]; then
+            cksum parent-seal.cksum changed-input reason dependency-c-compiler-inputs.cksum || exit "$?"
+        fi
+        if [ -e parent-lowerer-seal.cksum ]; then
+            cksum parent-lowerer-seal.cksum changed-inputs-before.cksum \
+                changed-inputs-after.cksum preserved-package-files.cksum \
+                preserved-package-paths preserved-package-files-seal.cksum || exit "$?"
+        fi
+    )
+}
+
+# Keep the original compiler choice/receipt forever. An explicit, append-only
+# lowerer revision may replace only that qualified input, never the compiler,
+# profile, flags, headers, adapter or seed. This narrowly supports recovery of
+# a first-package failure with no completed packages; no automatic resealing.
+selection_verify_current() {
+    local sealed=$1 requested=$2 revision="$1/../lowerer-requalification" original_choice parent
+    if [ -e "${1%/*}/layout-transport-requalification" ]; then
+        selection_verify_layout "$sealed" "$requested" "${1%/*}/layout-transport-requalification"
+        return "$?"
+    fi
+    if [ ! -e "$revision" ]; then
+        selection_verify_seal "$sealed" "$requested"; return "$?"
+    fi
+    selection_verify_metadata "$sealed" "$requested" || return "$?"
+    original_choice=$selected
+    [ "$original_choice" = mipspro ] || return 2
+    selection_verify_files "$sealed" "$consumer/harness/ghc710-mipspro-hc" || return "$?"
+    [ "$(cat "$revision/changed-input")" = "$consumer/harness/ghc710-mipspro-hc" ] || return 2
+    parent=$(cksum "$sealed/seal.cksum") || return "$?"
+    [ "$parent" = "$(cat "$revision/parent-seal.cksum")" ] || return 2
+    selection_verify_seal "$revision" "$original_choice" || return "$?"
+}
+
+selection_requalify_lowerer() {
+    local sealed=$1 requested=$2 control=$3 pending revision status lowerer old_line new_line
+    [ "$requested" = mipspro ] || { selection_error 'lowerer revision requires explicit mipspro'; return 2; }
+    revision="$control/lowerer-requalification"
+    [ ! -e "$revision" ] || { selection_error 'lowerer revision already exists; inspect it, never overwrite'; return 2; }
+    selection_verify_metadata "$sealed" "$requested" || return "$?"
+    lowerer="$consumer/harness/ghc710-mipspro-hc"
+    selection_verify_files "$sealed" "$lowerer" || return "$?"
+    old_line=$(awk -v path="$lowerer" 'NF == 3 && $3 == path { print }' "$sealed/files.cksum") || return "$?"
+    new_line=$(cksum "$lowerer") || return "$?"
+    [ -n "$old_line" ] && [ "$old_line" != "$new_line" ] || return 2
+    selection_validate_gates --lowerer-requalification || return "$?"
+    # Both executable cohorts must be fresh, and the FFI launcher must have
+    # captured exactly the same compiler-input manifest as the five suites.
+    if selection_manifest_has "$sealed/files.cksum" "$ffi/run"; then return 2; fi
+    if selection_manifest_has "$sealed/files.cksum" "$suites/runtime/run"; then return 2; fi
+    cmp "$ffi/compiler-inputs.cksum" "$job/artifacts/five-suite-inputs.cksum" >/dev/null || return 2
+    selection_verify_list "$ffi/compiler-inputs.cksum" "$ffi" || return "$?"
+    mkdir "$control/lock" || return "$?"
+    if (
+        [ ! -e "$revision" ] || exit 2
+        pending="$control/lowerer-attempt-$$"
+        mkdir "$pending" || exit "$?"
+        printf '%s\n' "$selected" > "$pending/compiler" || exit "$?"
+        printf '%s\n' "$expected_profile" > "$pending/profile" || exit "$?"
+        printf '%s\n' "$requested" > "$pending/requested" || exit "$?"
+        selection_version > "$pending/compiler-version.txt" 2>&1 || exit "$?"
+        cmp "$pending/compiler-version.txt" "$sealed/compiler-version.txt" >/dev/null || exit 2
+        selection_record_files > "$pending/files.cksum" || exit "$?"
+        cp "$job/artifacts/optimization-qualification.log" "$pending/five-suite.log" || exit "$?"
+        cp "$job/dependency-c.log" "$pending/dependency-c.log" || exit "$?"
+        cp "$job/artifacts/five-suite-inputs.cksum" "$pending/five-suite-inputs.cksum" || exit "$?"
+        cp "$ffi/inputs.cksum" "$pending/dependency-c-inputs.cksum" || exit "$?"
+        cp "$ffi/compiler-inputs.cksum" "$pending/dependency-c-compiler-inputs.cksum" || exit "$?"
+        cksum "$sealed/seal.cksum" > "$pending/parent-seal.cksum" || exit "$?"
+        printf '%s\n' "$lowerer" > "$pending/changed-input" || exit "$?"
+        printf '%s\n' 'Explicit same-MIPSpro lowerer repair after first-package failure; fresh generated-C and dependency-C/FFI gates; no completed packages.' > "$pending/reason" || exit "$?"
+        date -u > "$pending/selected-at" || exit "$?"
+        selection_receipt "$pending" > "$pending/seal.cksum" || exit "$?"
+        selection_verify_files "$sealed" "$lowerer" || exit "$?"
+        selection_validate_gates --lowerer-requalification || exit "$?"
+        selection_verify_seal "$pending" "$requested" >/dev/null || exit "$?"
+        mv "$pending" "$revision" || exit "$?"
+        printf '%s\n' "$selected" || exit "$?"
+    ); then status=0; else status=$?; fi
+    rmdir "$control/lock" || return "$?"
+    return "$status"
+}
+
+# This second explicit revision is limited to the two diagnosed compiler-input
+# repairs. The one already built package keeps its original object provenance.
+# The manifest was captured before either input changed, not reconstructed
+# from whatever package files happen to exist at reselection time.
+selection_preserved_package() {
+    local snapshot=$1 mode=${2-} sum size path extra expected actual count=0
+    local package=base-compat-0.11.2
+    local registration="$consumer/package.conf.d/base-compat-0.11.2-1c302c9576c3b9afc71aecb2ac008159.conf"
+    local installed="$consumer/install/lib/mips-irix-ghc-7.10.3/base-compat-0.11.2-L401oStAzxO5SP7p60XNmS"
+    local objects="$consumer/sources/base-compat-0.11.2/dist"
+    [ -s "$snapshot/preserved-package-files.cksum" ] || return 2
+    # The copied seal retains its original path; verify its numeric identity.
+    read -r sum size path extra < "$snapshot/preserved-package-files-seal.cksum" || return 2
+    [ -z "$extra" ] || return 2
+    [ "$path" = "$run_root/shellcheck-native-selection/repair-layout-transport/preserved-package-files.cksum" ] || return 2
+    actual=$(cksum "$snapshot/preserved-package-files.cksum") || return "$?"
+    [ "$actual" = "$sum $size $snapshot/preserved-package-files.cksum" ] || return 2
+    selection_verify_list "$snapshot/preserved-package-files.cksum" "$consumer" || return "$?"
+    for expected in "$consumer/dependencies.plan" "$consumer/completed/$package" "$registration"; do
+        selection_manifest_has "$snapshot/preserved-package-files.cksum" "$expected" || return 2
+    done
+    [ "$(cat "$consumer/completed/$package")" = "$(head -1 "$consumer/dependencies.plan")" ] || return 2
+    [ -d "$installed" ] && [ -d "$objects" ] || return 2
+    while read -r sum size path extra; do
+        case "$path" in
+            "$consumer/dependencies.plan"|"$consumer/completed/$package"|"$registration") ;;
+            "$installed"/*|"$objects"/*) count=$((count + 1)) ;;
+            *) selection_error "unexpected preserved package input: $path"; return 2 ;;
+        esac
+    done < "$snapshot/preserved-package-files.cksum"
+    [ "$count" -gt 0 ] || return 2
+    # Require complete inventory coverage, including detecting extra/missing
+    # files. No mutable package.cache or later package output enters this seal.
+    expected=$(LC_ALL=C sort "$snapshot/preserved-package-paths") || return "$?"
+    actual=$(find "$installed" "$objects" -type f | LC_ALL=C sort) || return "$?"
+    [ "$actual" = "$expected" ] || return 2
+    while IFS= read -r path; do
+        selection_manifest_has "$snapshot/preserved-package-files.cksum" "$path" || return 2
+    done < "$snapshot/preserved-package-paths"
+    [ "$count" = "$(wc -l < "$snapshot/preserved-package-paths" | tr -d '[:space:]')" ] || return 2
+    if [ "$mode" = --before-seal ]; then
+        [ "$(ls -A "$consumer/completed")" = "$package" ] || return 2
+    fi
+}
+
+selection_layout_history() {
+    local sealed=$1 requested=$2 prior="${1%/*}/lowerer-requalification" parent version
+    selection_verify_metadata "$sealed" "$requested" || return "$?"
+    [ "$selected" = mipspro ] || return 2
+    selection_verify_files "$sealed" "$consumer/harness/ghc710-mipspro-hc" "$consumer/harness/native-mipspro-cc" || return "$?"
+    selection_verify_metadata "$prior" mipspro || return "$?"
+    [ "$(cat "$prior/changed-input")" = "$consumer/harness/ghc710-mipspro-hc" ] || return 2
+    parent=$(cksum "$sealed/seal.cksum") || return "$?"
+    [ "$parent" = "$(cat "$prior/parent-seal.cksum")" ] || return 2
+    selection_verify_files "$prior" "$consumer/harness/ghc710-mipspro-hc" "$consumer/harness/native-mipspro-cc" || return "$?"
+    version=$(selection_version 2>&1) || return "$?"
+    [ "$version" = "$(cat "$sealed/compiler-version.txt")" ] || return 2
+    [ "$version" = "$(cat "$prior/compiler-version.txt")" ] || return 2
+}
+
+selection_layout_changed() {
+    local prior=$1 revision=$2 name path before after expected_before expected_after
+    local paths
+    paths=$(printf '%s\n' "$consumer/harness/ghc710-mipspro-hc" "$consumer/harness/native-mipspro-cc") || return "$?"
+    [ "$(cat "$revision/changed-input")" = "$paths" ] || return 2
+    expected_before=
+    expected_after=
+    for name in ghc710-mipspro-hc native-mipspro-cc; do
+        path="$consumer/harness/$name"
+        selection_manifest_has "$prior/files.cksum" "$path" || return 2
+        before=$(awk -v path="$path" 'NF == 3 && $3 == path { print }' "$prior/files.cksum") || return "$?"
+        after=$(cksum "$path") || return "$?"
+        [ "$before" != "$after" ] || return 2
+        expected_before="${expected_before}${before}
+"
+        expected_after="${expected_after}${after}
+"
+    done
+    [ "$(cat "$revision/changed-inputs-before.cksum")" = "$(printf '%s' "$expected_before")" ] || return 2
+    [ "$(cat "$revision/changed-inputs-after.cksum")" = "$(printf '%s' "$expected_after")" ] || return 2
+}
+
+selection_verify_layout() {
+    local sealed=$1 requested=$2 revision=$3 prior="${1%/*}/lowerer-requalification" parent
+    selection_layout_history "$sealed" "$requested" || return "$?"
+    selection_verify_metadata "$revision" mipspro || return "$?"
+    parent=$(cksum "$sealed/seal.cksum") || return "$?"
+    [ "$parent" = "$(cat "$revision/parent-seal.cksum")" ] || return 2
+    parent=$(cksum "$prior/seal.cksum") || return "$?"
+    [ "$parent" = "$(cat "$revision/parent-lowerer-seal.cksum")" ] || return 2
+    selection_layout_changed "$prior" "$revision" || return "$?"
+    selection_preserved_package "$revision" || return "$?"
+    selection_verify_seal "$revision" mipspro || return "$?"
+}
+
+selection_requalify_layout() {
+    local sealed=$1 requested=$2 control=$3 pending revision snapshot prior status name path old_line new_line
+    [ "$requested" = mipspro ] || { selection_error 'layout/transport revision requires explicit mipspro'; return 2; }
+    revision="$control/layout-transport-requalification"
+    snapshot="$control/repair-layout-transport"
+    prior="$control/lowerer-requalification"
+    [ ! -e "$revision" ] || { selection_error 'layout/transport revision already exists; never overwrite'; return 2; }
+    selection_layout_history "$sealed" "$requested" || return "$?"
+    cmp "$snapshot/original-selection/seal.cksum" "$sealed/seal.cksum" >/dev/null || return 2
+    cmp "$snapshot/lowerer-requalification/seal.cksum" "$prior/seal.cksum" >/dev/null || return 2
+    selection_validate_gates --layout-transport-requalification || return "$?"
+    for path in "$ffi/run" "$suites/runtime/run" "$suites/clock/run" "$suites/unix/run" "$suites/unix-bytestring/run" "$suites/bytestring-integer/run"; do
+        if selection_manifest_has "$sealed/files.cksum" "$path"; then return 2; fi
+        if selection_manifest_has "$prior/files.cksum" "$path"; then return 2; fi
+    done
+    cmp "$ffi/compiler-inputs.cksum" "$job/artifacts/five-suite-inputs.cksum" >/dev/null || return 2
+    selection_verify_list "$ffi/compiler-inputs.cksum" "$ffi" || return "$?"
+    mkdir "$control/lock" || return "$?"
+    if (
+        [ ! -e "$revision" ] || exit 2
+        pending="$control/layout-transport-attempt-$$"
+        mkdir "$pending" || exit "$?"
+        printf '%s\n' "$selected" > "$pending/compiler" || exit "$?"
+        printf '%s\n' "$expected_profile" > "$pending/profile" || exit "$?"
+        printf '%s\n' "$requested" > "$pending/requested" || exit "$?"
+        selection_version > "$pending/compiler-version.txt" 2>&1 || exit "$?"
+        cmp "$pending/compiler-version.txt" "$sealed/compiler-version.txt" >/dev/null || exit 2
+        selection_record_files > "$pending/files.cksum" || exit "$?"
+        cp "$job/artifacts/optimization-qualification.log" "$pending/five-suite.log" || exit "$?"
+        cp "$job/dependency-c.log" "$pending/dependency-c.log" || exit "$?"
+        cp "$job/artifacts/five-suite-inputs.cksum" "$pending/five-suite-inputs.cksum" || exit "$?"
+        cp "$ffi/inputs.cksum" "$pending/dependency-c-inputs.cksum" || exit "$?"
+        cp "$ffi/compiler-inputs.cksum" "$pending/dependency-c-compiler-inputs.cksum" || exit "$?"
+        cksum "$sealed/seal.cksum" > "$pending/parent-seal.cksum" || exit "$?"
+        cksum "$prior/seal.cksum" > "$pending/parent-lowerer-seal.cksum" || exit "$?"
+        for name in ghc710-mipspro-hc native-mipspro-cc; do
+            path="$consumer/harness/$name"
+            selection_manifest_has "$prior/files.cksum" "$path" || exit 2
+            old_line=$(awk -v path="$path" 'NF == 3 && $3 == path { print }' "$prior/files.cksum") || exit "$?"
+            new_line=$(cksum "$path") || exit "$?"
+            [ "$old_line" != "$new_line" ] || exit 2
+            printf '%s\n' "$path" >> "$pending/changed-input" || exit "$?"
+            printf '%s\n' "$old_line" >> "$pending/changed-inputs-before.cksum" || exit "$?"
+            printf '%s\n' "$new_line" >> "$pending/changed-inputs-after.cksum" || exit "$?"
+        done
+        for name in preserved-package-files.cksum preserved-package-paths preserved-package-files-seal.cksum; do
+            cp "$snapshot/$name" "$pending/$name" || exit "$?"
+        done
+        printf '%s\n' 'Explicit same-MIPSpro layout and lossless diagnostic-transport repair; fresh generated-C and dependency-C/FFI gates. Preserve base-compat objects under the preceding receipt; no compiler/profile/flags/header/seed change.' > "$pending/reason" || exit "$?"
+        date -u > "$pending/selected-at" || exit "$?"
+        selection_receipt "$pending" > "$pending/seal.cksum" || exit "$?"
+        selection_validate_gates --layout-transport-requalification || exit "$?"
+        selection_verify_layout "$sealed" "$requested" "$pending" >/dev/null || exit "$?"
+        mv "$pending" "$revision" || exit "$?"
+        printf '%s\n' "$selected" || exit "$?"
+    ); then status=0; else status=$?; fi
+    rmdir "$control/lock" || return "$?"
+    return "$status"
+}
+
+selection_choose() {
+    local requested=$1 kind
+    case "$requested" in
+        auto)
+            # Only a complete, still-matching capability gate makes a compiler
+            # eligible. No fallback occurs after the selected directory exists.
+            for kind in mipspro gcc; do
+                selection_profile "$kind" || return "$?"
+                if selection_validate_gates; then return 0; fi
+                printf 'Compiler selection: %s is not eligible\n' "$kind" >&2
+            done
+            selection_error 'no qualified compiler is available'; return 2 ;;
+        mipspro|gcc)
+            selection_profile "$requested" || return "$?"
+            selection_validate_gates || return "$?" ;;
+        *) selection_error 'expected auto, mipspro or gcc'; return 2 ;;
+    esac
+}
+
+selection_main() {
+    local mode=${1-} requested=${2-} control sealed pending status
+    run_root=${IRIX_RUN_ROOT-/var/tmp/haskell-ghc-irix-experiment}
+    case "$run_root" in /*) ;; *) selection_error 'run root must be absolute'; return 2 ;; esac
+    case "$run_root" in *[[:space:]]*|*'/../'*|*'/./'*) return 2 ;; esac
+    case "$requested" in auto|mipspro|gcc) ;; *) return 2 ;; esac
+    control="$run_root/shellcheck-native-selection"
+    sealed="$control/selected"
+    case "$mode" in
+        --check) selection_verify_current "$sealed" "$requested"; return "$?" ;;
+        --requalify-lowerer) selection_requalify_lowerer "$sealed" "$requested" "$control"; return "$?" ;;
+        --requalify-layout-transport) selection_requalify_layout "$sealed" "$requested" "$control"; return "$?" ;;
+        --select) ;;
+        *) selection_error 'usage: select-native-compiler {--select|--check|--requalify-lowerer|--requalify-layout-transport} {auto|mipspro|gcc}'; return 2 ;;
+    esac
+    if [ -e "$sealed" ]; then selection_verify_current "$sealed" "$requested"; return "$?"; fi
+    mkdir -p "$control" || return "$?"
+    mkdir "$control/lock" || { selection_error 'selection locked; inspect the existing attempt'; return 2; }
+    # Explicitly guarded subshell: Bash 3.2 must not mask any failed operation.
+    if (
+        [ ! -e "$sealed" ] || exit 2
+        selection_choose "$requested" || exit "$?"
+        pending="$control/attempt-$$"
+        mkdir "$pending" || exit "$?"
+        printf '%s\n' "$selected" > "$pending/compiler" || exit "$?"
+        printf '%s\n' "$expected_profile" > "$pending/profile" || exit "$?"
+        printf '%s\n' "$requested" > "$pending/requested" || exit "$?"
+        selection_version > "$pending/compiler-version.txt" 2>&1 || exit "$?"
+        selection_record_files > "$pending/files.cksum" || exit "$?"
+        cp "$job/artifacts/optimization-qualification.log" "$pending/five-suite.log" || exit "$?"
+        cp "$job/dependency-c.log" "$pending/dependency-c.log" || exit "$?"
+        cp "$job/artifacts/five-suite-inputs.cksum" "$pending/five-suite-inputs.cksum" || exit "$?"
+        cp "$ffi/inputs.cksum" "$pending/dependency-c-inputs.cksum" || exit "$?"
+        date -u > "$pending/selected-at" || exit "$?"
+        selection_receipt "$pending" > "$pending/seal.cksum" || exit "$?"
+        selection_validate_gates || exit "$?"
+        selection_verify_seal "$pending" "$requested" >/dev/null || exit "$?"
+        mv "$pending" "$sealed" || exit "$?"
+        printf '%s\n' "$selected" || exit "$?"
+    ); then status=0; else status=$?; fi
+    rmdir "$control/lock" || return "$?"
+    return "$status"
+}

@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# Actual compiler/runtime regression, not the host adapter mock test.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+adapter=${IRIX_MIPSPRO_ADAPTER:?Set the private qualified adapter path}
+parent=${IRIX_TEST_PARENT:?Set a durable session test parent}
+mkdir -p "$parent" || exit "$?"
+fixture="$parent/mipspro-assembly-$$"
+mkdir "$fixture" || exit "$?"
+cd "$fixture" || exit "$?"
+cksum "$adapter" "$here/mipspro-assembly-string-unit.c" "$here/mipspro-assembly-string-main.c" > inputs.cksum || exit "$?"
+"$BASH" "$adapter" -S "$here/mipspro-assembly-string-unit.c" -o string.s > compile.log 2>&1 || exit "$?"
+test -s string.s || exit 1
+"$BASH" "$adapter" -x assembler -c string.s -o string.o > assemble.log 2>&1 || exit "$?"
+test -s string.o || exit 1
+"$BASH" "$adapter" "$here/mipspro-assembly-string-main.c" string.o -o run > link.log 2>&1 || exit "$?"
+test -x run || exit 1
+status=0
+./run > run.log 2>&1 || status=$?
+printf '%s\n' "$status" > status
+cat run.log
+test "$status" = 0 || exit "$status"
+# Keep exact assembly/object/binary/logs for the caller's evidence checkpoint.
+printf 'Retained assembly regression: %s\n' "$fixture"

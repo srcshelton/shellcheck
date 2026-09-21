@@ -1,0 +1,280 @@
+#!/usr/bin/env bash
+# Contract tests only. Mock PASS records are never native qualification evidence.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set IRIX_TEST_PARENT to a durable session test directory}
+mkdir -p "$parent"
+if command -v mktemp >/dev/null 2>&1; then
+    fixture=$(mktemp -d "$parent/compiler-selection.XXXXXXXX")
+else
+    fixture="$parent/compiler-selection.$$"
+    mkdir "$fixture"
+fi
+trap 'result=$?; trap - EXIT; rm -rf "$fixture"; exit "$result"' EXIT
+export IRIX_RUN_ROOT="$fixture"
+run_root=$IRIX_RUN_ROOT
+source "$here/native-compiler-selection"
+# Only these two functions replace host-specific compiler discovery; gate and
+# selection checks below are the real implementation, with private fixture data.
+selection_compiler() { printf '%s/compiler-%s\n' "$fixture" "$selected"; }
+selection_version() { "$(selection_compiler)"; }
+fail() { printf 'FAIL %s\n' "$*" >&2; exit 1; }
+reject() {
+    local status=0
+    "$@" > "$fixture/rejected.log" 2>&1 || status=$?
+    [ "$status" -ne 0 ] || fail "unexpected success: $*"
+}
+fixture_profile() {
+    local kind=$1 name path
+    selection_profile "$kind" || exit "$?"
+    mkdir -p "$job/artifacts" "$consumer/harness" "$consumer/qualification"
+    printf '#!/bin/sh\necho mock-%s-compiler\n' "$kind" > "$fixture/compiler-$kind"
+    chmod +x "$fixture/compiler-$kind"
+    printf '%s\n' "$expected_profile" > "$consumer/build-profile"
+    cp "$consumer/build-profile" "$consumer/optimization-qualified"
+    # PID 2147483647 is deliberately outside this host's live PID namespace.
+    printf '2147483647\n' > "$job/native.pid"
+    printf '2147483646\n' > "$job/dependency-c.pid"
+    printf '0\n' > "$job/guest-status"
+    printf '0\n' > "$job/dependency-c-status"
+    suites="$consumer/qualification/$expected_profile/attempt-2147483647"
+    ffi="$consumer/qualification/dependency-c-2147483646"
+    mkdir -p "$ffi"
+    printf '%s\n' "$ffi" > "$job/dependency-c-current"
+    cp "$consumer/build-profile" "$ffi/qualified"
+    printf '#!/bin/sh\nexit 0\n' > "$ffi/run"
+    chmod +x "$ffi/run"
+    : > "$job/artifacts/optimization-qualification.log"
+    for name in runtime clock unix unix-bytestring bytestring-integer; do
+        mkdir -p "$suites/$name"
+        cp "$ffi/run" "$suites/$name/run"
+        printf 'PASS %s (%s)\n' "$name" "$expected_profile" >> "$job/artifacts/optimization-qualification.log"
+    done
+    : > "$job/artifacts/five-suite-inputs.cksum"
+    while IFS= read -r name; do
+        printf 'mock adapter %s\n' "$name" > "$consumer/harness/$name"
+        cksum "$consumer/harness/$name" >> "$job/artifacts/five-suite-inputs.cksum"
+    done < <(selection_gate_inputs)
+    if [ "$kind" = mipspro ]; then
+        for path in ghc-headers/Stg.h ghc-headers/Rts.h ghc-headers/stg/Regs.h \
+            ghc-headers/rts/storage/Block.h compiler-config/compiler.defaults \
+            compiler-config/gcc-runtime/libgcc.a compiler-config/gcc-runtime/crtbegin.o \
+            compiler-config/gcc-runtime/crtend.o; do
+            mkdir -p "$(dirname "$consumer/$path")"
+            printf 'mock %s\n' "$path" > "$consumer/$path"
+            cksum "$consumer/$path" >> "$job/artifacts/five-suite-inputs.cksum"
+        done
+    fi
+    printf 'mock Haskell\n' > "$ffi/smoke.hs"
+    cp "$ffi/smoke.hs" "$consumer/harness/DependencyCSmoke.hs"
+    printf 'mock qualifier\n' > "$consumer/harness/qualify-native-dependency-c"
+    (cd "$ffi" && cksum smoke.hs) > "$ffi/inputs.cksum"
+    : > "$job/dependency-c.log"
+    for name in primitive-0.6.4.0 text-1.2.3.1 hashable-1.3.0.0 aeson-1.4.7.1; do
+        printf 'PASS dependency C compile %s\n' "$name" >> "$job/dependency-c.log"
+    done
+    for name in 1 2 3 4 5 6 7 8 9; do
+        printf 'PASS mock runtime check %s\n' "$name" >> "$job/dependency-c.log"
+    done
+    printf '%s\n' 'IRIX dependency C/FFI smoke tests passed' \
+        'PASS representative dependency C/FFI qualification' >> "$job/dependency-c.log"
+}
+
+fixture_profile gcc
+fixture_profile mipspro
+selection_validate_gates || fail 'complete private capability fixture'
+printf '1\n' > "$job/dependency-c-status"
+reject selection_main --select mipspro
+selection_choose auto || fail 'fallback to qualified GCC before selection'
+[ "$selected" = gcc ] || fail 'expected GCC fallback'
+selection_profile mipspro
+printf '0\n' > "$job/dependency-c-status"
+printf '%s\n' "$$" > "$job/native.pid"
+reject selection_main --select mipspro
+printf '2147483647\n' > "$job/native.pid"
+mkdir "$consumer/package.conf.d"
+reject selection_main --select mipspro
+rmdir "$consumer/package.conf.d"
+cp "$job/artifacts/five-suite-inputs.cksum" "$fixture/full-inputs"
+sed '$d' "$fixture/full-inputs" > "$job/artifacts/five-suite-inputs.cksum"
+reject selection_main --select mipspro
+cp "$fixture/full-inputs" "$job/artifacts/five-suite-inputs.cksum"
+cp "$consumer/harness/native-mipspro-cc" "$fixture/adapter"
+printf 'changed\n' >> "$consumer/harness/native-mipspro-cc"
+reject selection_main --select mipspro
+cp "$fixture/adapter" "$consumer/harness/native-mipspro-cc"
+answer=$(selection_main --select auto) || fail 'auto selection'
+[ "$answer" = mipspro ] || fail 'auto did not prefer qualified MIPSpro'
+answer=$(selection_main --check auto) || fail 'sealed check'
+[ "$answer" = mipspro ] || fail 'wrong sealed compiler'
+reject selection_main --select gcc
+reject selection_main --check gcc
+printf 'changed\n' >> "$consumer/harness/native-mipspro-cc"
+reject selection_main --select auto
+cp "$fixture/adapter" "$consumer/harness/native-mipspro-cc"
+selection_main --check mipspro >/dev/null || fail 'restored exact input'
+# Status/PID files legitimately change during later builds; the archived gate
+# logs, immutable attempts and exact compiler inputs remain authoritative.
+printf 'build-active\n' > "$job/guest-status"
+printf '%s\n' "$$" > "$job/native.pid"
+selection_main --check mipspro >/dev/null || fail 'later build status invalidated seal'
+# A first-package failure may explicitly qualify a changed lowerer without
+# changing the once-selected compiler or modifying its original receipt.
+cp -R "$fixture/shellcheck-native-selection/selected" "$fixture/original-receipt"
+printf '0\n' > "$job/guest-status"
+printf '2147483647\n' > "$job/native.pid"
+mkdir "$consumer/package.conf.d"
+reject selection_main --requalify-lowerer mipspro
+printf 'narrow lowerer repair\n' >> "$consumer/harness/ghc710-mipspro-hc"
+reject selection_main --check mipspro
+reject selection_main --select auto
+reject selection_main --requalify-lowerer auto
+reject selection_main --requalify-lowerer gcc
+reject selection_main --requalify-lowerer mipspro
+cp "$job/artifacts/five-suite-inputs.cksum" "$fixture/old-manifest"
+: > "$job/artifacts/five-suite-inputs.cksum"
+while read -r sum size path; do
+    cksum "$path" >> "$job/artifacts/five-suite-inputs.cksum" || fail 'refresh fixture manifest'
+done < "$fixture/old-manifest"
+# Fresh manifests alone must not let old test executables qualify a repair.
+cp "$job/artifacts/five-suite-inputs.cksum" "$ffi/compiler-inputs.cksum"
+reject selection_main --requalify-lowerer mipspro
+cp -R "$suites" "$consumer/qualification/$expected_profile/attempt-2147483645"
+cp -R "$ffi" "$consumer/qualification/dependency-c-2147483644"
+printf '2147483645\n' > "$job/native.pid"
+printf '2147483644\n' > "$job/dependency-c.pid"
+ffi="$consumer/qualification/dependency-c-2147483644"
+printf '%s\n' "$ffi" > "$job/dependency-c-current"
+mkdir "$consumer/completed"
+touch "$consumer/completed/one-package"
+reject selection_main --requalify-lowerer mipspro
+rm "$consumer/completed/one-package"
+printf 'changed\n' >> "$consumer/harness/native-mipspro-cc"
+reject selection_main --requalify-lowerer mipspro
+cp "$fixture/adapter" "$consumer/harness/native-mipspro-cc"
+printf 'not the qualified inputs\n' > "$ffi/compiler-inputs.cksum"
+reject selection_main --requalify-lowerer mipspro
+cp "$job/artifacts/five-suite-inputs.cksum" "$ffi/compiler-inputs.cksum"
+answer=$(selection_main --requalify-lowerer mipspro) || fail 'explicit same-compiler lowerer revision'
+[ "$answer" = mipspro ] || fail 'revision changed compiler'
+diff -r "$fixture/original-receipt" "$fixture/shellcheck-native-selection/selected" >/dev/null || fail 'original receipt modified'
+selection_main --check auto >/dev/null || fail 'requalified check'
+reject selection_main --requalify-lowerer mipspro
+reject selection_main --select gcc
+# Preserve one package built under the prior receipt, then qualify exactly two
+# repaired inputs. All fixture PASS records remain contract tests, not evidence.
+control="$fixture/shellcheck-native-selection"
+snapshot="$control/repair-layout-transport"
+mkdir "$snapshot"
+cp -R "$control/selected" "$snapshot/original-selection"
+cp -R "$control/lowerer-requalification" "$snapshot/lowerer-requalification"
+installed="$consumer/install/lib/mips-irix-ghc-7.10.3/base-compat-0.11.2-L401oStAzxO5SP7p60XNmS"
+objects="$consumer/sources/base-compat-0.11.2/dist"
+registration="$consumer/package.conf.d/base-compat-0.11.2-1c302c9576c3b9afc71aecb2ac008159.conf"
+mkdir -p "$installed" "$objects"
+printf 'mock base-compat pinned record\n' > "$consumer/dependencies.plan"
+cp "$consumer/dependencies.plan" "$consumer/completed/base-compat-0.11.2"
+printf 'mock registration\n' > "$registration"
+printf 'mock old library\n' > "$installed/libbase.a"
+printf 'mock old object\n' > "$objects/base.o"
+find "$installed" "$objects" -type f > "$snapshot/preserved-package-paths"
+cksum "$consumer/dependencies.plan" "$consumer/completed/base-compat-0.11.2" "$registration" > "$snapshot/preserved-package-files.cksum"
+while IFS= read -r path; do
+    cksum "$path" >> "$snapshot/preserved-package-files.cksum" || fail 'fixture preserved files'
+done < "$snapshot/preserved-package-paths"
+cksum "$snapshot/preserved-package-files.cksum" > "$snapshot/preserved-package-files-seal.cksum"
+selection_preserved_package "$snapshot" --before-seal || fail 'complete preserved package'
+reject selection_main --requalify-layout-transport auto
+reject selection_main --requalify-layout-transport gcc
+# Unchanged inputs and old gate paths cannot qualify the revision.
+reject selection_main --requalify-layout-transport mipspro
+# Preserve any failed pending attempt rather than reusing its directory.
+for pending in "$control"/layout-transport-attempt-*; do
+    [ ! -d "$pending" ] || mv "$pending" "$pending-unchanged-fixture"
+done
+printf 'layout repair\n' >> "$consumer/harness/ghc710-mipspro-hc"
+printf 'lossless transport repair\n' >> "$consumer/harness/native-mipspro-cc"
+reject selection_main --check auto
+reject selection_main --select auto
+reject selection_main --requalify-layout-transport mipspro
+cp "$job/artifacts/five-suite-inputs.cksum" "$fixture/layout-old-manifest"
+: > "$job/artifacts/five-suite-inputs.cksum"
+while read -r sum size path; do
+    cksum "$path" >> "$job/artifacts/five-suite-inputs.cksum" || fail 'new layout fixture manifest'
+done < "$fixture/layout-old-manifest"
+cp "$job/artifacts/five-suite-inputs.cksum" "$ffi/compiler-inputs.cksum"
+reject selection_main --requalify-layout-transport mipspro
+cp -R "$consumer/qualification/$expected_profile/attempt-2147483645" "$consumer/qualification/$expected_profile/attempt-2147483643"
+cp -R "$ffi" "$consumer/qualification/dependency-c-2147483642"
+printf '2147483643\n' > "$job/native.pid"
+printf '2147483642\n' > "$job/dependency-c.pid"
+ffi="$consumer/qualification/dependency-c-2147483642"
+printf '%s\n' "$ffi" > "$job/dependency-c-current"
+reject_changed_file() {
+    local target=$1
+    cp -p "$target" "$fixture/layout-saved-file" || fail 'save changed-file fixture'
+    printf 'unexpected third input change\n' >> "$target" || fail 'change fixture'
+    reject selection_main --requalify-layout-transport mipspro
+    cp -p "$fixture/layout-saved-file" "$target" || fail 'restore changed-file fixture'
+}
+for path in "$consumer/ghc-headers/Stg.h" "$consumer/compiler-config/compiler.defaults" \
+    "$consumer/harness/native-shellcheck-cc" "$fixture/compiler-mipspro" \
+    "$consumer/build-profile" "$control/selected/seal.cksum" \
+    "$control/lowerer-requalification/seal.cksum" "$consumer/dependencies.plan" \
+    "$registration" "$installed/libbase.a" "$objects/base.o" \
+    "$snapshot/preserved-package-files.cksum" "$snapshot/preserved-package-paths"; do
+    reject_changed_file "$path"
+done
+mv "$registration" "$fixture/registration-saved"
+reject selection_main --requalify-layout-transport mipspro
+mv "$fixture/registration-saved" "$registration"
+touch "$installed/extra-file"
+reject selection_main --requalify-layout-transport mipspro
+rm "$installed/extra-file"
+touch "$consumer/completed/extra-package"
+reject selection_main --requalify-layout-transport mipspro
+rm "$consumer/completed/extra-package"
+printf '1\n' > "$job/dependency-c-status"
+reject selection_main --requalify-layout-transport mipspro
+printf '0\n' > "$job/dependency-c-status"
+printf '1\n' > "$job/guest-status"
+reject selection_main --requalify-layout-transport mipspro
+printf '0\n' > "$job/guest-status"
+printf '%s\n' "$$" > "$job/native.pid"
+reject selection_main --requalify-layout-transport mipspro
+printf '2147483643\n' > "$job/native.pid"
+printf '%s\n' "$$" > "$job/dependency-c.pid"
+reject selection_main --requalify-layout-transport mipspro
+printf '2147483642\n' > "$job/dependency-c.pid"
+mv "$ffi/qualified" "$fixture/qualified-saved"
+reject selection_main --requalify-layout-transport mipspro
+mv "$fixture/qualified-saved" "$ffi/qualified"
+printf 'mismatched FFI compiler inputs\n' > "$ffi/compiler-inputs.cksum"
+reject selection_main --requalify-layout-transport mipspro
+cp "$job/artifacts/five-suite-inputs.cksum" "$ffi/compiler-inputs.cksum"
+answer=$(selection_main --requalify-layout-transport mipspro) || fail 'explicit layout/transport revision with preserved package'
+[ "$answer" = mipspro ] || fail 'layout revision changed compiler'
+diff -r "$fixture/original-receipt" "$control/selected" >/dev/null || fail 'layout revision modified original receipt'
+diff -r "$snapshot/lowerer-requalification" "$control/lowerer-requalification" >/dev/null || fail 'layout revision modified prior receipt'
+selection_main --check auto >/dev/null || fail 'layout revision current check'
+reject selection_main --requalify-layout-transport mipspro
+reject selection_main --select gcc
+touch "$consumer/completed/later-package"
+printf 'mutable cache\n' > "$consumer/package.conf.d/package.cache"
+printf 'build-running\n' > "$job/guest-status"
+printf '%s\n' "$$" > "$job/native.pid"
+selection_main --check mipspro >/dev/null || fail 'later package state invalidated immutable revision'
+cp "$installed/libbase.a" "$fixture/library-saved"
+printf 'changed old library\n' >> "$installed/libbase.a"
+reject selection_main --check auto
+cp "$fixture/library-saved" "$installed/libbase.a"
+cp "$control/layout-transport-requalification/parent-lowerer-seal.cksum" "$fixture/parent-saved"
+printf 'changed parent link\n' >> "$control/layout-transport-requalification/parent-lowerer-seal.cksum"
+reject selection_main --check auto
+cp "$fixture/parent-saved" "$control/layout-transport-requalification/parent-lowerer-seal.cksum"
+selection_main --check mipspro >/dev/null || fail 'restored package/parent receipt'
+printf 'another unqualified repair\n' >> "$consumer/harness/ghc710-mipspro-hc"
+reject selection_main --check auto
+printf 'changed\n' >> "$fixture/shellcheck-native-selection/selected/files.cksum"
+reject selection_main --check auto
+echo 'PASS compiler selection preference, capability failures, immutable inputs, explicit lowerer and two-input layout/transport revisions, preserved package inventory, unchanged parent receipts, no stale/live gates or post-selection fallback (mock contracts only)'

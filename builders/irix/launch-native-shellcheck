@@ -1,0 +1,38 @@
+#!/usr/local/bin/bash
+set -euo pipefail
+phase=${1-}
+case "$phase" in
+    setup) driver=bootstrap-native-setup ;;
+    dependencies) driver=build-native-dependencies ;;
+    shellcheck) driver=build-native-shellcheck ;;
+    optimized) driver=build-native-optimized; export IRIX_CONSUMER_PROFILE=optimized ;;
+    *) echo 'usage: launch-native-shellcheck {setup|dependencies|shellcheck|optimized}' >&2; exit 2 ;;
+esac
+source "$(dirname "$0")/native-consumer-profile"
+jobs=("$job")
+if [ "$profile" = optimized ]; then jobs+=("$run_root/job"); fi
+for checked_job in "${jobs[@]}"; do
+if [ -s "$checked_job/native.pid" ]; then
+    previous=$(sed -n '1p' "$checked_job/native.pid")
+    case "$previous" in ''|*[!0-9]*) echo 'invalid existing PID' >&2; exit 1 ;; esac
+    if kill -0 "$previous" 2>/dev/null; then
+        echo "build process $previous is still alive" >&2
+        exit 1
+    fi
+fi
+done
+test -f "$consumer/harness/$driver"
+mkdir -p "$job"
+for state in guest-status native-console.log; do
+    if [ -f "$job/$state" ]; then cp "$job/$state" "$job/previous-$state"; fi
+done
+rm -f "$job/guest-status" "$job/guest-status.tmp"
+cd "$run_root"
+launcher=(/usr/local/bin/bash)
+if [ "$profile" = optimized ]; then launcher=(/usr/bin/nice /usr/local/bin/bash); fi
+nohup "${launcher[@]}" "$consumer/harness/$driver" \
+    > "$job/native-console.log" 2>&1 < /dev/null &
+printf '%s\n' "$!" > "$job/native.pid"
+date -u > "$job/native-started-at"
+printf 'shellcheck %s\n' "$phase" > "$job/native-stage"
+cat "$job/native.pid"

@@ -1,0 +1,121 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set IRIX_TEST_PARENT to a durable session test directory}
+mkdir -p "$parent"
+test_dir=$(mktemp -d "$parent/native-shellcheck.XXXXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+export IRIX_RUN_ROOT="$test_dir" FAKE_CALLS="$test_dir/calls"
+consumer="$test_dir/shellcheck-native"
+mkdir -p "$test_dir/ghc-7.10.3/inplace/bin" "$consumer/bin" "$consumer/completed" \
+    "$consumer/source/dist/build/shellcheck"
+printf '%s\n' 'Name: ShellCheck' > "$consumer/source/ShellCheck.cabal"
+printf '%s\n' 'first-1|Simple|-|--constraint=base==4.8.2.0|abc|def' > "$consumer/dependencies.plan"
+cp "$consumer/dependencies.plan" "$consumer/completed/first-1"
+cat > "$test_dir/ghc-7.10.3/inplace/bin/ghc-stage1" <<'EOF'
+#!/usr/bin/env bash
+echo 7.10.3
+EOF
+cat > "$test_dir/ghc-7.10.3/inplace/bin/ghc-pkg" <<'EOF'
+#!/usr/bin/env bash
+exit "${PACKAGE_FAIL-0}"
+EOF
+cat > "$consumer/bin/native-setup" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_CALLS"
+[[ $2 != "${FAIL_STAGE-}" ]] || exit 17
+EOF
+cat > "$consumer/source/dist/build/shellcheck/shellcheck" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >> "$FAKE_CALLS"
+if [[ $1 == --version ]]; then
+    [[ ${FAIL_STAGE-} != version ]] || exit 18
+    echo 'version: native-test'; exit
+fi
+case "$*" in
+    *smoke-clean.sh)
+        [[ ${FAIL_STAGE-} != clean ]] || exit 23
+        echo '{"comments":[]}'; exit 0 ;;
+    *smoke-warning.sh)
+        [[ ${FAIL_STAGE-} != crash ]] || exit 139
+        if [[ ${FAIL_STAGE-} == diagnostic ]]; then echo '{"comments":[]}'; else echo '{"comments":[{"code":2086}]}'; fi
+        exit 1 ;;
+    *smoke-function-pipeline.sh)
+        [[ ${FAIL_STAGE-} != function-pipeline ]] || exit 1
+        echo '{"comments":[]}'; exit 0 ;;
+    *smoke-function-forward.sh)
+        [[ ${FAIL_STAGE-} != function-forward ]] || exit 0
+        echo '{"comments":[{"code":2218}]}'; exit 1 ;;
+    *) exit 99 ;;
+esac
+EOF
+chmod +x "$test_dir/ghc-7.10.3/inplace/bin/"* "$consumer/bin/native-setup" \
+    "$consumer/source/dist/build/shellcheck/shellcheck"
+bash "$here/build-native-shellcheck" > "$test_dir/success.log" 2>&1
+[[ -s $consumer/native-ready && $(cat "$test_dir/job/guest-status") == 0 ]]
+grep -F -- '--flags=irix-legacy-ghc' "$FAKE_CALLS" >/dev/null
+grep -F -- '--disable-library-stripping' "$FAKE_CALLS" >/dev/null
+grep -F -- '--ghc-option=-O0' "$FAKE_CALLS" >/dev/null
+grep -F -- "--ghc-option=-pgml --ghc-option=$consumer/harness/native-shellcheck-link" "$FAKE_CALLS" >/dev/null
+for dialect in irix-sh irix-ksh; do
+    grep -F -- "--norc --shell=$dialect --format=json1" "$FAKE_CALLS" >/dev/null
+done
+for stage in configure build version clean diagnostic crash function-pipeline function-forward; do
+    printf 'old readiness marker\n' > "$consumer/native-ready"
+    status=0
+    FAIL_STAGE="$stage" bash "$here/build-native-shellcheck" > "$test_dir/failure.log" 2>&1 || status=$?
+    [[ $status != 0 && $(cat "$test_dir/job/guest-status") == "$status" ]]
+    [[ ! -e $consumer/native-ready ]]
+done
+status=0
+printf 'old readiness marker\n' > "$consumer/native-ready"
+PACKAGE_FAIL=5 bash "$here/build-native-shellcheck" > "$test_dir/missing.log" 2>&1 || status=$?
+[[ $status == 5 && ! -e $consumer/native-ready ]]
+# Verify the linker adapter delegates only the consumer root and preserves
+# arguments with spaces, archive order, ABI flags and the compiler exit status.
+mkdir -p "$test_dir/repository/builders/irix" "$test_dir/ghc-7.10.3/.bootstrap-bin"
+cat > "$test_dir/repository/builders/irix/collapse-library-search-paths" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+[[ $1 == "$IRIX_RUN_ROOT/shellcheck-native/install/lib" ]]
+[[ $2 == "$IRIX_RUN_ROOT/shellcheck-native/.library-search" ]]
+[[ $3 == "$IRIX_RUN_ROOT/ghc-7.10.3/.bootstrap-bin/gcc" ]]
+compiler=$3
+shift 3
+exec "$compiler" "$@"
+EOF
+cat > "$test_dir/ghc-7.10.3/.bootstrap-bin/gcc" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+[[ $# == 5 && $1 == '-L/private path' && $2 == first.a && $3 == -lm ]]
+[[ $4 == -mabi=n32 && $5 == last.a ]]
+exit "${LINK_STATUS-0}"
+EOF
+chmod +x "$test_dir/ghc-7.10.3/.bootstrap-bin/gcc"
+bash "$here/native-shellcheck-link" '-L/private path' first.a -lm -mabi=n32 last.a
+status=0
+LINK_STATUS=37 bash "$here/native-shellcheck-link" '-L/private path' first.a -lm -mabi=n32 last.a || status=$?
+[[ $status == 37 ]]
+# The optimised profile must configure and publish only in its own tree/job.
+optimized="$test_dir/shellcheck-native-optimized"
+cp -R "$consumer" "$optimized"
+printf '%s\n' fuel-mips4-generic-n32-gcc346-ghc7103-O2-v2 > "$optimized/build-profile"
+# Selection is tested separately with immutable-receipt fixtures. This test
+# supplies only its successful contract and verifies refusal below.
+mkdir -p "$optimized/harness"
+cat > "$optimized/harness/select-native-compiler" <<'EOF'
+#!/usr/bin/env bash
+[[ $1 == --check && $2 == gcc ]] || exit 2
+exit "${SELECTION_STATUS-0}"
+EOF
+original=$(cksum "$consumer/bin/shellcheck")
+status=0
+IRIX_CONSUMER_PROFILE=optimized SELECTION_STATUS=23 bash "$here/build-native-shellcheck" > "$test_dir/selection-refused.log" 2>&1 || status=$?
+[[ $status == 23 ]]
+IRIX_CONSUMER_PROFILE=optimized bash "$here/build-native-shellcheck" > "$test_dir/optimized.log" 2>&1
+[[ -s $optimized/native-ready && $(cat "$optimized/job/guest-status") == 0 ]]
+[[ $(cksum "$consumer/bin/shellcheck") == "$original" ]]
+[[ $(cat "$test_dir/job/guest-status") == 5 ]]
+grep -F -- "--enable-optimization=2 --ghc-option=-O2 --with-gcc=$optimized/harness/native-shellcheck-cc" "$FAKE_CALLS" >/dev/null
+grep -F -- "--ghc-option=-pgma --ghc-option=$optimized/harness/native-shellcheck-cc" "$FAKE_CALLS" >/dev/null
+echo 'PASS private build, pinned dependencies, consumer linker isolation, both IRIX smoke profiles and no READY after build/runtime/registration failures'

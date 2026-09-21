@@ -1,0 +1,15 @@
+--- a/cbits/cbits.c
++++ b/cbits/cbits.c
+@@ -7,7 +7,12 @@
+  */
+ 
+ #include <string.h>
++#if defined(__sgi)
++/* IRIX stdint.h requires MIPSpro's __c99; inttypes.h exposes these types. */
++#include <inttypes.h>
++#else
+ #include <stdint.h>
++#endif
+ #include <stdio.h>
+ #include "text_cbits.h"
+ 

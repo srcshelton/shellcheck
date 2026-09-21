@@ -1,0 +1,97 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set IRIX_TEST_PARENT to a durable session test directory}
+mkdir -p "$parent"
+test_dir=$(mktemp -d "$parent/native-dependencies.XXXXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+export IRIX_RUN_ROOT="$test_dir" IRIX_MIN_FREE_KIB=0
+export FAKE_CALLS="$test_dir/calls" FAKE_REG="$test_dir/registered"
+consumer="$test_dir/shellcheck-native"
+mkdir -p "$test_dir/ghc-7.10.3/inplace/bin" "$consumer/bin" "$FAKE_REG" \
+    "$consumer/sources/first-1" "$consumer/sources/second-2"
+cat > "$test_dir/ghc-7.10.3/inplace/bin/ghc-stage1" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+if [[ $1 == --numeric-version ]]; then echo 7.10.3; exit; fi
+[[ $1 == --make ]] || exit 90
+[[ $PWD == */integer-logarithms-smoke || $PWD == */text-smoke ]]
+[[ " $* " == *" -i "* ]] # Clear source search paths, use installed packages.
+printf 'smoke|%s\n' "$*" >> "$FAKE_CALLS"
+[[ ${FAIL_SMOKE-} != compile ]] || exit 23
+smoke_output=
+while [[ $# -gt 0 ]]; do
+    if [[ $1 == -o ]]; then shift; smoke_output=$1; fi
+    shift
+done
+[[ -n $smoke_output ]]
+printf '#!/usr/bin/env bash\n[[ ${FAIL_SMOKE-} != runtime ]] || exit 24\n' > "$smoke_output"
+chmod +x "$smoke_output"
+EOF
+cat > "$test_dir/ghc-7.10.3/inplace/bin/ghc-pkg" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+if [[ $1 == init ]]; then mkdir "$2"; exit; fi
+[[ $1 == --global-package-db=*/shellcheck-native/package.conf.d ]]
+[[ $2 == --no-user-package-db && $3 == field && $5 == id ]]
+[[ -f $FAKE_REG/$4 ]]
+EOF
+cat > "$consumer/bin/native-setup" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+package=${PWD##*/}
+printf '%s|%s\n' "$package" "$*" >> "$FAKE_CALLS"
+if [[ $2 == "${FAIL_STAGE-}" ]]; then exit 17; fi
+if [[ $2 == register ]]; then
+    [[ $# == 2 ]] # Cabal 1.22 inherits configure's private database.
+    touch "$FAKE_REG/$package"
+fi
+EOF
+chmod +x "$consumer/bin/native-setup" "$test_dir/ghc-7.10.3/inplace/bin/"*
+printf '%s\n' 'first-1|Simple|-|--constraint=base==4.8.2.0|abc|def' \
+    'second-2|Configure|feature -other|--constraint=first==1|ghi|jkl' > "$consumer/dependencies.plan"
+for stage in configure build copy register; do
+    status=0
+    FAIL_STAGE="$stage" bash "$here/build-native-dependencies" > "$test_dir/failure.log" 2>&1 || status=$?
+    [[ $status == 17 && $(cat "$test_dir/job/guest-status") == 17 ]]
+    [[ ! -e $consumer/completed/first-1 && ! -e $consumer/completed/second-2 ]]
+done
+bash "$here/build-native-dependencies" > "$test_dir/success.log" 2>&1
+[[ $(cat "$test_dir/job/guest-status") == 0 ]]
+[[ -f $consumer/completed/first-1 && -f $consumer/completed/second-2 ]]
+grep -F -- "--prefix=$consumer/install --package-db=clear --package-db=global --package-db=$consumer/package.conf.d" "$FAKE_CALLS" >/dev/null
+grep -F -- 'Configure configure' "$FAKE_CALLS" >/dev/null
+grep -F -- '--flags=feature -other --constraint=first==1' "$FAKE_CALLS" >/dev/null
+grep -F -- '--disable-library-stripping' "$FAKE_CALLS" >/dev/null
+grep -F -- '--ghc-option=-O0' "$FAKE_CALLS" >/dev/null
+calls=$(wc -l < "$FAKE_CALLS")
+bash "$here/build-native-dependencies" > "$test_dir/resume.log" 2>&1
+[[ $(wc -l < "$FAKE_CALLS") == "$calls" ]]
+rm "$FAKE_REG/second-2"
+bash "$here/build-native-dependencies" > "$test_dir/reregister.log" 2>&1
+[[ $(wc -l < "$FAKE_CALLS") == $((calls + 4)) ]]
+printf '%s\n' 'altered plan' > "$consumer/completed/first-1"
+status=0
+bash "$here/build-native-dependencies" > "$test_dir/changed.log" 2>&1 || status=$?
+[[ $status == 2 && $(cat "$test_dir/job/guest-status") == 2 ]]
+# Isolate smoke-gate control flow from exact-source overlays (separate tests).
+mkdir "$test_dir/smoke-harness"
+cp "$here/build-native-dependencies" "$test_dir/smoke-harness/"
+cp "$here/native-consumer-profile" "$test_dir/smoke-harness/"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$test_dir/smoke-harness/apply-native-dependency-overlays"
+for package in integer-logarithms-1.0.3.1 text-1.2.3.1; do
+    mkdir -p "$consumer/sources/$package"
+    printf '%s|Simple|-|--constraint=base==4.8.2.0|abc|def\n' "$package" > "$consumer/dependencies.plan"
+    for gate in compile runtime; do
+        if [[ $gate == compile ]]; then expected=23; else expected=24; fi
+        status=0
+        FAIL_SMOKE="$gate" bash "$test_dir/smoke-harness/build-native-dependencies" > "$test_dir/smoke-failure.log" 2>&1 || status=$?
+        [[ $status == "$expected" && $(cat "$test_dir/job/guest-status") == "$expected" ]]
+        [[ ! -e $consumer/completed/$package ]]
+    done
+    bash "$test_dir/smoke-harness/build-native-dependencies" > "$test_dir/smoke-success.log" 2>&1
+    [[ -f $consumer/completed/$package && $(cat "$test_dir/job/guest-status") == 0 ]]
+done
+grep -F 'IntegerLogarithmsSmoke.hs' "$FAKE_CALLS" >/dev/null
+grep -F 'TextSmoke.hs' "$FAKE_CALLS" >/dev/null
+echo 'PASS private prefix/database, Simple/Configure, failure/resume, changed-plan refusal and both native smoke gates'

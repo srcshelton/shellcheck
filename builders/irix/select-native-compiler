@@ -1,0 +1,6 @@
+#!/usr/local/bin/bash
+# Select once from actually qualified private candidates; never compile/fallback
+# within a dependency build. This does not start any build or touch the reference.
+set -euo pipefail
+source "$(dirname "$0")/native-compiler-selection"
+selection_main "$@"

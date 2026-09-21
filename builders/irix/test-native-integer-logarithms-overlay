@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set IRIX_TEST_PARENT to a durable session test directory}
+original=${IRIX_INTEGER_LOGARITHMS_SOURCE:?Set IRIX_INTEGER_LOGARITHMS_SOURCE to the pinned unmodified source tree}
+mkdir -p "$parent"
+test_dir=$(mktemp -d "$parent/integer-logarithms-overlay.XXXXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+mkdir "$test_dir/sources"
+cp -R "$original" "$test_dir/sources/integer-logarithms-1.0.3.1"
+export IRIX_PATCH=${IRIX_PATCH-$(command -v patch)}
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources"
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources"
+relative=src/Math/NumberTheory/Logarithms.hs
+patched="$test_dir/sources/integer-logarithms-1.0.3.1/$relative"
+cpp=${CPP-cpp}
+for backend in legacy modern simple oldbase bignum; do
+    options=(-traditional-cpp -P -w -D__GLASGOW_HASKELL__=710)
+    case "$backend" in
+        legacy) options+=('-DMIN_VERSION_base(x,y,z)=1' '-DMIN_VERSION_integer_gmp(x,y,z)=0') ;;
+        modern) options+=('-DMIN_VERSION_base(x,y,z)=1' '-DMIN_VERSION_integer_gmp(x,y,z)=1') ;;
+        simple) options+=('-DMIN_VERSION_base(x,y,z)=1') ;;
+        oldbase) options+=('-DMIN_VERSION_base(x,y,z)=0' '-DMIN_VERSION_integer_gmp(x,y,z)=0') ;;
+        bignum) options+=('-DMIN_VERSION_base(x,y,z)=1' '-DMIN_VERSION_ghc_bignum(x,y,z)=1') ;;
+    esac
+    "$cpp" "${options[@]}" "$original/$relative" | sed '/^[[:space:]]*$/d; /^[[:space:]]*--/d' > "$test_dir/$backend.original"
+    "$cpp" "${options[@]}" "$patched" | sed '/^[[:space:]]*$/d; /^[[:space:]]*--/d' > "$test_dir/$backend.patched"
+    if [[ $backend == legacy ]]; then
+        grep -F 'naturalLog2# n = integerLog2# (toInteger n)' "$test_dir/$backend.patched" >/dev/null
+        ! grep -E 'NatS#|NatJ#|Jp#|import GHC.Natural' "$test_dir/$backend.patched"
+    else
+        cmp "$test_dir/$backend.original" "$test_dir/$backend.patched"
+    fi
+done
+printf '\nchanged\n' >> "$patched"
+status=0
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources" > "$test_dir/rejected.log" 2>&1 || status=$?
+[[ $status == 2 ]]
+echo 'PASS legacy GMP fallback, unchanged modern/simple/old-base/bignum branches, idempotency and preimage refusal'

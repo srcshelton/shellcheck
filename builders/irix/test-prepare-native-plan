@@ -1,0 +1,53 @@
+#!/usr/bin/env python3
+"""Focused offline tests; fixtures are removed from the declared durable parent."""
+import hashlib
+import importlib.machinery
+import json
+import os
+import pathlib
+import shutil
+import tempfile
+
+here = pathlib.Path(__file__).resolve().parent
+module = importlib.machinery.SourceFileLoader("prepare", str(here / "prepare-native-plan")).load_module()
+parent = pathlib.Path(os.environ["IRIX_TEST_PARENT"])
+parent.mkdir(parents=True, exist_ok=True)
+root = pathlib.Path(tempfile.mkdtemp(prefix="native-plan.", dir=parent))
+try:
+    nodes = []
+    for name, mode, deps in (("second", "Configure", ["first"]), ("first", "Simple", [])):
+        description = (root / "sources" / (name + "-1") / (name + ".cabal"))
+        description.parent.mkdir(parents=True)
+        description.write_text("build-type: " + mode + "\n")
+        archive = root / "cache" / name / "1" / (name + "-1.tar.gz")
+        archive.parent.mkdir(parents=True)
+        archive.write_bytes(b"archive fixture")
+        nodes.append({"id": name, "pkg-name": name, "pkg-version": "1",
+                      "type": "configured", "style": "global", "flags": {"test": False},
+                      "components": {"lib": {"depends": deps}},
+                      "pkg-src-sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
+                      "pkg-cabal-sha256": hashlib.sha256(description.read_bytes()).hexdigest()})
+    plan = root / "plan.json"
+    data = {"compiler-id": "ghc-7.10.3", "os": "irix", "arch": "mips", "install-plan": nodes}
+    plan.write_text(json.dumps(data))
+    result = module.prepare(plan, root / "sources", root / "cache").splitlines()
+    assert result[0].startswith("first-1|Simple|-test||")
+    assert result[1].startswith("second-1|Configure|-test|--constraint=first==1|")
+    for error in ("hash", "cycle", "platform", "custom"):
+        changed = json.loads(json.dumps(data))
+        if error == "hash": changed["install-plan"][0]["pkg-src-sha256"] = "bad"
+        if error == "cycle": changed["install-plan"][1]["components"]["lib"]["depends"] = ["second"]
+        if error == "platform": changed["os"] = "linux"
+        if error == "custom":
+            description.write_text("build-type: Custom\n")
+            changed["install-plan"][1]["pkg-cabal-sha256"] = hashlib.sha256(description.read_bytes()).hexdigest()
+        plan.write_text(json.dumps(changed))
+        try:
+            module.prepare(plan, root / "sources", root / "cache")
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("Accepted " + error)
+    print("PASS topological order, component dependencies, flags, hashes, cycles, platform and unsupported Setup")
+finally:
+    shutil.rmtree(root)

@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Validate dated Cabal inputs and emit a native Setup build plan.
+
+Usage: prepare-native-plan PLAN_JSON EXTRACTED_SOURCES HACKAGE_CACHE OUTPUT
+All downloads/resolution happen separately; this tool never accesses a network.
+"""
+import hashlib
+import json
+import pathlib
+import re
+import sys
+
+
+def sha256(path):
+    with path.open("rb") as stream:
+        return hashlib.file_digest(stream, "sha256").hexdigest()
+
+
+def prepare(plan_path, sources, cache):
+    plan = json.loads(plan_path.read_text())
+    if (plan["compiler-id"], plan["os"], plan["arch"]) != (
+            "ghc-7.10.3", "irix", "mips"):
+        raise ValueError("Expected the real GHC 7.10.3 IRIX/mips solver plan")
+    nodes = {node["id"]: node for node in plan["install-plan"]}
+    pending = {key: node for key, node in nodes.items()
+               if node["type"] == "configured" and node["style"] == "global"}
+    rows = []
+    while pending:
+        ready = []
+        for key, node in pending.items():
+            deps = node.get("depends", node.get("components", {}).get("lib", {}).get("depends"))
+            if deps is None or any(dep not in nodes for dep in deps):
+                raise ValueError("Missing dependency metadata for " + key)
+            if not any(dep in pending for dep in deps):
+                ready.append((node["pkg-name"].lower(), key, deps))
+        if not ready:
+            raise ValueError("Cyclic dependency plan")
+        for _, key, deps in sorted(ready):
+            node = pending.pop(key)
+            name, version = node["pkg-name"], node["pkg-version"]
+            if not re.fullmatch(r"[A-Za-z0-9-]+", name) or not re.fullmatch(r"[0-9.]+", version):
+                raise ValueError("Unsafe package identity")
+            package = name + "-" + version
+            description = sources / package / (name + ".cabal")
+            archive = cache / name / version / (package + ".tar.gz")
+            for path, expected in ((archive, node["pkg-src-sha256"]),
+                                   (description, node["pkg-cabal-sha256"])):
+                if sha256(path) != expected:
+                    raise ValueError("Hash mismatch: " + str(path))
+            match = re.search(r"^build-type\s*:\s*(\w+)", description.read_text(), re.I | re.M)
+            build_type = match.group(1).capitalize() if match else "Simple"
+            if build_type not in ("Simple", "Configure"):
+                raise ValueError("Unsupported build type: " + package)
+            flags = []
+            for flag, enabled in sorted(node["flags"].items()):
+                if not re.fullmatch(r"[A-Za-z0-9-]+", flag):
+                    raise ValueError("Unsafe flag")
+                flags.append(("" if enabled else "-") + flag)
+            constraints = sorted({"--constraint=" + nodes[dep]["pkg-name"] + "==" +
+                                  nodes[dep]["pkg-version"] for dep in deps})
+            rows.append("|".join((package, build_type, " ".join(flags) or "-",
+                                  " ".join(constraints), node["pkg-src-sha256"],
+                                  node["pkg-cabal-sha256"])))
+    return "\n".join(rows) + "\n"
+
+
+if __name__ == "__main__":
+    if len(sys.argv) != 5:
+        sys.exit(__doc__)
+    try:
+        result = prepare(*(pathlib.Path(arg) for arg in sys.argv[1:4]))
+        pathlib.Path(sys.argv[4]).write_text(result)
+    except (ValueError, KeyError, OSError) as error:
+        sys.exit(str(error))

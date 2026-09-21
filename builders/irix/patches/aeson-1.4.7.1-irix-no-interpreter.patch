@@ -1,0 +1,71 @@
+--- a/aeson.cabal
++++ b/aeson.cabal
+@@ -76,8 +76,6 @@
+     Data.Aeson.Parser
+     Data.Aeson.Text
+     Data.Aeson.Types
+-    Data.Aeson.TH
+-    Data.Aeson.QQ.Simple
+ 
+     Data.Aeson.Encoding.Internal
+     Data.Aeson.Internal
+@@ -85,6 +83,15 @@
+     Data.Aeson.Parser.Internal
+ 
+   -- Deprecated modules
++  -- IRIX's unregisterised GHC has no interpreter. ShellCheck only uses the
++  -- runtime JSON API, not compile-time TH derivation or quasiquotation.
++  if os(irix)
++    cpp-options: -DAESON_IRIX_NO_TH
++  else
++    exposed-modules:
++      Data.Aeson.TH
++      Data.Aeson.QQ.Simple
++
+   exposed-modules:
+     Data.Aeson.Encode
+ 
+--- a/Data/Aeson/Types/Internal.hs
++++ b/Data/Aeson/Types/Internal.hs
+@@ -4,6 +4,7 @@
+ {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+ {-# LANGUAGE NoImplicitPrelude #-}
+ {-# LANGUAGE Rank2Types #-}
++#if !defined(AESON_IRIX_NO_TH)
+ #if __GLASGOW_HASKELL__ >= 800
+ -- a) THQ works on cross-compilers and unregisterised GHCs
+ -- b) may make compilation faster as no dynamic loading is ever needed (not sure about this)
+@@ -12,6 +13,7 @@
+ #else
+ {-# LANGUAGE TemplateHaskell #-}
+ #endif
++#endif
+ 
+ -- |
+ -- Module:      Data.Aeson.Types.Internal
+@@ -107,7 +109,9 @@
+ import qualified Data.HashMap.Strict as H
+ import qualified Data.Scientific as S
+ import qualified Data.Vector as V
++#if !defined(AESON_IRIX_NO_TH)
+ import qualified Language.Haskell.TH.Syntax as TH
++#endif
+ 
+ #if !MIN_VERSION_unordered_containers(0,2,6)
+ import Data.List (sort)
+@@ -412,6 +416,7 @@
+     hashWithSalt = hashValue
+ 
+ -- @since 0.11.0.0
++#if !defined(AESON_IRIX_NO_TH)
+ instance TH.Lift Value where
+     lift Null = [| Null |]
+     lift (Bool b) = [| Bool b |]
+@@ -428,6 +433,7 @@
+ #if MIN_VERSION_template_haskell(2,16,0)
+     liftTyped = TH.unsafeTExpCoerce . TH.lift
+ #endif
++#endif
+ 
+ -- | The empty array.
+ emptyArray :: Value

@@ -1,0 +1,45 @@
+# Sourced by the private consumer drivers and compiler adapters.
+# The functional binary/package DB used by corpus validation is immutable.
+# shellcheck shell=bash
+# shellcheck disable=SC2034 # Shared configuration is consumed by the sourcing driver.
+run_root=${IRIX_RUN_ROOT-/var/tmp/haskell-ghc-irix-experiment}
+profile=${IRIX_CONSUMER_PROFILE-functional}
+case "$profile" in
+    functional)
+        consumer="$run_root/shellcheck-native"
+        job="$run_root/job"
+        optimization_options=(--disable-optimization --ghc-option=-O0)
+        optimization_ghc=(-O0)
+        ;;
+    optimized|gcc|mipspro)
+        case "$profile" in
+            optimized|gcc)
+                profile=optimized
+                consumer="$run_root/shellcheck-native-optimized"
+                expected_profile='fuel-mips4-generic-n32-gcc346-ghc7103-O2-v2'
+                ;;
+            mipspro)
+                consumer="$run_root/shellcheck-native-mipspro"
+                expected_profile='fuel-mips4-r14000-n32-mipspro744m-ghc7103-O2-v1'
+                ;;
+        esac
+        job="$consumer/job"
+        if [ ! -f "$consumer/build-profile" ] ||
+           [ "$(cat "$consumer/build-profile")" != "$expected_profile" ]; then
+            echo 'Missing or incompatible isolated optimisation profile' >&2
+            exit 2
+        fi
+        optimization_options=(--enable-optimization=2 --ghc-option=-O2
+            --with-gcc="$consumer/harness/native-shellcheck-cc"
+            --ghc-option=-pgmc --ghc-option="$consumer/harness/native-shellcheck-cc"
+            --ghc-option=-pgma --ghc-option="$consumer/harness/native-shellcheck-cc")
+        optimization_ghc=(-O2 -pgmc "$consumer/harness/native-shellcheck-cc"
+            -pgma "$consumer/harness/native-shellcheck-cc"
+            -pgml "$consumer/harness/native-shellcheck-link")
+        ;;
+    *) echo 'Invalid IRIX_CONSUMER_PROFILE' >&2; exit 2 ;;
+esac
+export IRIX_CONSUMER_PROFILE="$profile"
+# Keep compiler/configure scratch resumable with this private build, not /tmp.
+mkdir -p "$consumer/tmp"
+export TMPDIR="$consumer/tmp"

@@ -1,0 +1,130 @@
+#!/usr/local/bin/bash
+# Build the checksum-pinned dependency plan into a private prefix/database.
+# All source trees, objects and per-package logs survive failure for resumption.
+set -euo pipefail
+source "$(dirname "$0")/native-consumer-profile"
+if [ "$profile" != functional ]; then
+    selected_kind=gcc
+    if [ "$profile" = mipspro ]; then selected_kind=mipspro; fi
+    "$BASH" "$consumer/harness/select-native-compiler" --check "$selected_kind" >/dev/null || exit "$?"
+fi
+if [ "$profile" = mipspro ]; then
+    "$BASH" "$consumer/harness/check-native-hsc2hs" || exit "$?"
+    # Cabal's Configure hook invokes autoconf independently of --with-gcc.
+    # Explicitly keep feature probes on the same selected native C compiler.
+    export CC="$consumer/harness/native-shellcheck-cc"
+    export CPP="$consumer/harness/native-shellcheck-cc -E"
+fi
+ghc_bin="$run_root/ghc-7.10.3/inplace/bin"
+setup="$consumer/bin/native-setup"
+db="$consumer/package.conf.d"
+prefix="$consumer/install"
+plan="$consumer/dependencies.plan"
+log="$job/artifacts/shellcheck-dependencies.log"
+min_free=${IRIX_MIN_FREE_KIB-262144}
+mkdir -p "$job/artifacts" "$consumer/completed" "$consumer/home" "$prefix"
+finish()
+{
+    result=$?
+    trap - 0
+    printf '%s\n' "$result" > "$job/guest-status.tmp"
+    mv "$job/guest-status.tmp" "$job/guest-status"
+    if [ "$result" -ne 0 ]; then
+        echo "Native dependencies failed ($result); preserving sources, objects and $log" >&2
+        tail -60 "$log" >&2 || :
+    fi
+    exit "$result"
+}
+trap finish 0
+trap 'exit 130' 1 2 3 15
+case "$min_free" in ''|*[!0-9]*) echo 'Invalid free-space threshold' >&2; exit 2 ;; esac
+[ -s "$plan" ] && [ -x "$setup" ] && [ -x "$ghc_bin/ghc-pkg" ]
+PATH="$run_root/ghc-7.10.3/.bootstrap-bin:$ghc_bin:/usr/local/bin:/usr/nekoware/bin:/usr/bin:/bin:/usr/sbin:/usr/bsd"
+export PATH
+export HOME="$consumer/home" LC_ALL=C
+unset GHC_PACKAGE_PATH GHC_ENVIRONMENT
+[ "$("$ghc_bin/ghc-stage1" --numeric-version)" = 7.10.3 ]
+bash "$(dirname "$0")/apply-native-dependency-overlays" "$consumer/sources"
+if [ ! -d "$db" ]; then "$ghc_bin/ghc-pkg" init "$db"; fi
+registered()
+{
+    "$ghc_bin/ghc-pkg" --global-package-db="$db" --no-user-package-db \
+        field "$1" id >/dev/null 2>&1
+}
+while IFS= read -r record || [ -n "$record" ]; do
+    [ -n "$record" ] || continue
+    if [ "$profile" != functional ]; then
+        "$BASH" "$consumer/harness/select-native-compiler" --check "$selected_kind" >/dev/null || exit "$?"
+    fi
+    if [ "$profile" = mipspro ]; then
+        "$BASH" "$consumer/harness/check-native-hsc2hs" || exit "$?"
+    fi
+    IFS='|' read -r package mode flags constraints source_hash cabal_hash extra <<< "$record"
+    case "$package" in ''|*[!a-zA-Z0-9.-]*) echo 'Invalid package identity' >&2; exit 2 ;; esac
+    case "$mode" in Simple|Configure) ;; *) echo 'Unsupported Setup mode' >&2; exit 2 ;; esac
+    [ -n "$source_hash" ] && [ -n "$cabal_hash" ] && [ -z "$extra" ]
+    marker="$consumer/completed/$package"
+    if [ -f "$marker" ]; then
+        if [ "$(cat "$marker")" != "$record" ]; then
+            echo "Plan changed for completed $package; preserve it and resolve explicitly." >&2
+            exit 2
+        fi
+        if registered "$package"; then echo "Already complete: $package"; continue; fi
+        echo "Completed marker lacks registration; resuming $package"
+    fi
+    available=$(df -k "$consumer" | tail -1 | awk '{print $(NF-2)}')
+    case "$available" in ''|*[!0-9]*) echo 'Cannot determine free disk space' >&2; exit 2 ;; esac
+    [ "$available" -ge "$min_free" ] || { echo "Low space: $available KiB" >&2; exit 1; }
+    log="$job/artifacts/shellcheck-dependency-$package.log"
+    echo "Building $package ($mode); $available KiB free"
+    printf 'shellcheck dependency %s\n' "$package" > "$job/native-stage"
+    # Retain earlier attempts instead of truncating their diagnostic evidence.
+    printf '\nBuild attempt: %s\n' "$(date)" >> "$log"
+    cd "$consumer/sources/$package"
+    hsc2hs="$ghc_bin/hsc2hs"
+    if [ "$profile" = mipspro ]; then hsc2hs="$consumer/harness/native-mipspro-hsc2hs"; fi
+    options=(--with-compiler="$ghc_bin/ghc-stage1" --with-hc-pkg="$ghc_bin/ghc-pkg"
+        --with-hsc2hs="$hsc2hs" --prefix="$prefix"
+        --package-db=clear --package-db=global --package-db="$db"
+        "${optimization_options[@]}" --disable-shared --disable-library-profiling
+        --disable-executable-profiling --disable-library-for-ghci
+        --disable-tests --disable-benchmarks --disable-executable-stripping
+        --disable-library-stripping
+        --ghc-option=-pgml --ghc-option="$consumer/harness/native-shellcheck-link")
+    if [ "$flags" != - ]; then options+=("--flags=$flags"); fi
+    # Manifest fields are data, never eval. Split only the validated constraints.
+    for constraint in $constraints; do
+        case "$constraint" in --constraint=*[!a-zA-Z0-9.=\-]*|'') exit 2 ;; --constraint=*==*) ;; *) exit 2 ;; esac
+        options+=("$constraint")
+    done
+    "$setup" "$mode" configure "${options[@]}" >> "$log" 2>&1
+    "$setup" "$mode" build >> "$log" 2>&1
+    "$setup" "$mode" copy >> "$log" 2>&1
+    # Cabal 1.22 register inherits the final database configured above;
+    # unlike configure it does not accept a --package-db option.
+    "$setup" "$mode" register >> "$log" 2>&1
+    registered "$package"
+    if [ "$package" = integer-logarithms-1.0.3.1 ]; then
+        smoke="$consumer/integer-logarithms-smoke"
+        mkdir -p "$smoke"
+        # Never let --make discover upstream source modules in the package
+        # working directory; these probes must link the installed library.
+        (cd "$smoke" && "$ghc_bin/ghc-stage1" --make "${optimization_ghc[@]}" -i \
+            -no-user-package-db -package-db "$db" -package integer-logarithms \
+            "$consumer/harness/IntegerLogarithmsSmoke.hs" \
+            -odir "$smoke" -hidir "$smoke" -o "$smoke/run") >> "$log" 2>&1 || exit "$?"
+        "$smoke/run" >> "$log" 2>&1
+    elif [ "$package" = text-1.2.3.1 ]; then
+        smoke="$consumer/text-smoke"
+        mkdir -p "$smoke"
+        (cd "$smoke" && "$ghc_bin/ghc-stage1" --make "${optimization_ghc[@]}" -i \
+            -no-user-package-db -package-db "$db" -package text \
+            "$consumer/harness/TextSmoke.hs" \
+            -odir "$smoke" -hidir "$smoke" -o "$smoke/run") >> "$log" 2>&1 || exit "$?"
+        "$smoke/run" >> "$log" 2>&1
+    fi
+    printf '%s\n' "$record" > "$marker.tmp"
+    mv "$marker.tmp" "$marker"
+    echo "Completed: $package"
+done < "$plan"
+echo 'All native ShellCheck dependencies completed.'

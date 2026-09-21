@@ -1,0 +1,22 @@
+#!/usr/local/bin/bash
+# Build only an already sealed compiler choice. This never reruns successful
+# qualification or silently changes compiler after a package has been built.
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+requested=${1:?Usage: build-native-selected auto|mipspro|gcc}
+choice=$("$BASH" "$here/select-native-compiler" --check "$requested") || exit "$?"
+case "$choice" in
+    mipspro) export IRIX_CONSUMER_PROFILE=mipspro ;;
+    gcc) export IRIX_CONSUMER_PROFILE=optimized ;;
+    *) exit 2 ;;
+esac
+source "$here/native-consumer-profile"
+# Require the separately staged pinned plan/source and private Setup runner.
+# Selection itself never creates these, a package database, or a build process.
+test -s "$consumer/dependencies.plan" || exit 2
+test -s "$consumer/source/ShellCheck.cabal" || exit 2
+test -d "$consumer/sources" || exit 2
+test -x "$consumer/bin/native-setup" || exit 2
+"$BASH" "$consumer/harness/build-native-dependencies" || exit "$?"
+"$BASH" "$here/select-native-compiler" --check "$choice" >/dev/null || exit "$?"
+"$BASH" "$consumer/harness/build-native-shellcheck" || exit "$?"

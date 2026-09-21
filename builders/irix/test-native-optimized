@@ -1,0 +1,128 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set IRIX_TEST_PARENT to a durable session test directory}
+mkdir -p "$parent"
+if command -v mktemp >/dev/null 2>&1; then
+    test_dir=$(mktemp -d "$parent/native-optimized.XXXXXXXX")
+else
+    # Stock IRIX has no mktemp. mkdir refuses an existing PID-named fixture.
+    test_dir="$parent/native-optimized.$$"
+    mkdir "$test_dir"
+fi
+trap 'fixture_status=$?; trap - EXIT; rm -rf "$test_dir"; exit "$fixture_status"' EXIT
+export IRIX_RUN_ROOT="$test_dir" IRIX_CONSUMER_PROFILE=optimized
+export FAKE_ARGS="$test_dir/args" FAKE_PHASES="$test_dir/phases"
+consumer="$test_dir/shellcheck-native-optimized"
+mkdir -p "$consumer/harness" "$test_dir/shellcheck-native/bin"
+printf 'original binary\n' > "$test_dir/shellcheck-native/bin/shellcheck"
+status=0
+bash "$here/native-shellcheck-cc" -c input.c >/dev/null 2>&1 || status=$?
+[[ $status == 2 ]] || exit 1
+printf '%s\n' fuel-mips4-generic-n32-gcc346-ghc7103-O2-v2 > "$consumer/build-profile"
+source "$here/native-consumer-profile"
+[[ $job == "$consumer/job" ]] || exit 1
+[[ $TMPDIR == "$consumer/tmp" && -d $TMPDIR ]] || exit 1
+[[ " ${optimization_options[*]} " == *' --enable-optimization=2 '* ]] || exit 1
+[[ " ${optimization_options[*]} " == *" --ghc-option=-pgmc --ghc-option=$consumer/harness/native-shellcheck-cc "* ]] || exit 1
+[[ " ${optimization_options[*]} " == *" --ghc-option=-pgma --ghc-option=$consumer/harness/native-shellcheck-cc "* ]] || exit 1
+mkdir -p "$test_dir/repository/builders/irix" "$test_dir/ghc-7.10.3/inplace/bin"
+cp "$here/native-shellcheck-cc" "$here/native-shellcheck-link" "$here/native-consumer-profile" "$consumer/harness/"
+chmod +x "$consumer/harness/native-shellcheck-cc" "$consumer/harness/native-shellcheck-link"
+cat > "$test_dir/repository/builders/irix/collapse-library-search-paths" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+[[ $2 == "$IRIX_RUN_ROOT/shellcheck-native-optimized/"* ]] || exit 1
+shift 2
+exec "$@"
+EOF
+cat > "$test_dir/repository/builders/irix/irix-gcc-compat" <<'EOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$FAKE_ARGS"
+exit "${FAKE_STATUS-0}"
+EOF
+bash "$here/native-shellcheck-cc" -c 'input space.c' -O0
+grep -Fx 'input space.c' "$FAKE_ARGS" >/dev/null
+[[ $(tail -7 "$FAKE_ARGS" | head -4) == $'-mabi=n32\n-mips4\n-mtune=mips4\n-O2' ]] || exit 1
+grep -Fx -- -fno-strict-aliasing "$FAKE_ARGS" >/dev/null
+grep -Fx -- -fwrapv "$FAKE_ARGS" >/dev/null
+grep -Fx -- -mno-fused-madd "$FAKE_ARGS" >/dev/null
+status=0
+FAKE_STATUS=37 bash "$here/native-shellcheck-cc" -c input.c || status=$?
+[[ $status == 37 ]] || exit 1
+for option in -mabi=64 -ffast-math -Ofast -fstrict-aliasing; do
+    status=0
+    bash "$here/native-shellcheck-cc" "$option" >/dev/null 2>&1 || status=$?
+    [[ $status == 2 ]] || exit 1
+done
+bash "$here/native-shellcheck-cc" -Wl,-r -nostdlib -nodefaultlibs one.o two.o
+! grep -Fx -- -fwrapv "$FAKE_ARGS" >/dev/null || exit 1
+! grep -Fx -- -mno-fused-madd "$FAKE_ARGS" >/dev/null || exit 1
+cat > "$test_dir/ghc-7.10.3/inplace/bin/ghc-stage1" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf 'qualify %s\n' "$*" >> "$FAKE_PHASES"
+[[ $TMPDIR == "$IRIX_RUN_ROOT/${FAKE_CONSUMER_BASENAME-shellcheck-native-optimized}/tmp" && -d $TMPDIR ]] || exit 1
+[[ ${FAIL_QUALIFY-0} == 0 ]] || exit 29
+[[ " $* " == *' -O2 '* && " $* " == *' -pgmc '* && " $* " == *' -pgma '* && " $* " == *' -pgml '* ]] || exit 1
+[[ ${OMIT_QUALIFY_OUTPUT-0} == 0 ]] || exit 0
+printf '#!/usr/bin/env bash\nexit %s\n' "${FAIL_QUALIFY_RUN-0}" > run
+chmod +x run
+EOF
+chmod +x "$test_dir/ghc-7.10.3/inplace/bin/ghc-stage1"
+for phase in dependencies shellcheck; do
+    printf '#!/usr/bin/env bash\nprintf "%%s\\n" "%s" >> "$FAKE_PHASES"\n' "$phase" > "$consumer/harness/build-native-$phase"
+done
+status=0
+printf 'stale marker\n' > "$consumer/optimization-qualified"
+chmod -x "$consumer/harness/native-shellcheck-cc"
+bash "$here/build-native-optimized" >/dev/null 2>&1 || status=$?
+[[ $status == 126 && $(cat "$job/guest-status") == 126 ]] || exit 1
+[[ ! -e $consumer/optimization-qualified && ! -e $FAKE_PHASES ]] || exit 1
+chmod +x "$consumer/harness/native-shellcheck-cc"
+status=0
+printf 'stale marker\n' > "$consumer/optimization-qualified"
+FAIL_QUALIFY=1 bash "$here/build-native-optimized" >/dev/null 2>&1 || status=$?
+[[ $status == 29 && $(cat "$job/guest-status") == 29 ]] || exit 1
+[[ ! -e $consumer/optimization-qualified ]] || exit 1
+! grep -E '^(dependencies|shellcheck)$' "$FAKE_PHASES" >/dev/null || exit 1
+status=0
+OMIT_QUALIFY_OUTPUT=1 bash "$here/build-native-optimized" >/dev/null 2>&1 || status=$?
+[[ $status == 1 && $(cat "$job/guest-status") == 1 ]] || exit 1
+[[ ! -e $consumer/optimization-qualified ]] || exit 1
+! grep -E '^(dependencies|shellcheck)$' "$FAKE_PHASES" >/dev/null || exit 1
+status=0
+FAIL_QUALIFY_RUN=23 bash "$here/build-native-optimized" >/dev/null 2>&1 || status=$?
+[[ $status == 23 && $(cat "$job/guest-status") == 23 ]] || exit 1
+[[ ! -e $consumer/optimization-qualified ]] || exit 1
+! grep -E '^(dependencies|shellcheck)$' "$FAKE_PHASES" >/dev/null || exit 1
+bash "$here/build-native-optimized"
+[[ -f $consumer/optimization-qualified && $(cat "$job/guest-status") == 0 ]] || exit 1
+[[ $(head -1 "$consumer/optimization-qualified") == "$expected_profile" ]] || exit 1
+[[ $(grep -c '^PASS ' "$job/artifacts/optimization-qualification.log") == 5 ]] || exit 1
+[[ $(tail -2 "$FAKE_PHASES") == $'dependencies\nshellcheck' ]] || exit 1
+[[ $(cat "$test_dir/shellcheck-native/bin/shellcheck") == 'original binary' ]] || exit 1
+[[ ! -e $test_dir/job && ! -e $test_dir/shellcheck-native/package.conf.d ]] || exit 1
+rm "$FAKE_PHASES"
+bash "$here/build-native-optimized" --qualify-only
+[[ $(grep -c '^qualify ' "$FAKE_PHASES") == 5 ]] || exit 1
+! grep -E '^(dependencies|shellcheck)$' "$FAKE_PHASES" >/dev/null || exit 1
+primary="$test_dir/shellcheck-native-mipspro"
+cp -R "$consumer" "$primary"
+printf '%s\n' fuel-mips4-r14000-n32-mipspro744m-ghc7103-O2-v1 > "$primary/build-profile"
+cp "$here/native-mipspro-cc" "$primary/harness/"
+chmod +x "$primary/harness/native-mipspro-cc"
+rm "$FAKE_PHASES"
+status=0
+IRIX_CONSUMER_PROFILE=mipspro bash "$here/build-native-optimized" >/dev/null 2>&1 || status=$?
+[[ $status == 2 && ! -e $FAKE_PHASES ]] || exit 1
+chmod -x "$primary/harness/native-mipspro-cc"
+status=0
+IRIX_CONSUMER_PROFILE=mipspro bash "$here/build-native-optimized" --qualify-only >/dev/null 2>&1 || status=$?
+[[ $status == 126 && ! -e $FAKE_PHASES ]] || exit 1
+chmod +x "$primary/harness/native-mipspro-cc"
+IRIX_CONSUMER_PROFILE=mipspro FAKE_CONSUMER_BASENAME=shellcheck-native-mipspro bash "$here/build-native-optimized" --qualify-only
+[[ $(head -1 "$primary/optimization-qualified") == fuel-mips4-r14000-n32-mipspro744m-ghc7103-O2-v1 ]] || exit 1
+[[ $(grep -c '^qualify ' "$FAKE_PHASES") == 5 ]] || exit 1
+! grep -E '^(dependencies|shellcheck)$' "$FAKE_PHASES" >/dev/null || exit 1
+echo 'PASS isolated profile, compiler/assembler flags, safe semantics, failure propagation and qualification-before-build'

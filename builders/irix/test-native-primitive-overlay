@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set IRIX_TEST_PARENT to a durable session test directory}
+original=${IRIX_PRIMITIVE_SOURCE:?Set IRIX_PRIMITIVE_SOURCE to the pinned unmodified source tree}
+mkdir -p "$parent"
+test_dir=$(mktemp -d "$parent/primitive-overlay.XXXXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+mkdir "$test_dir/sources"
+cp -R "$original" "$test_dir/sources/primitive-0.6.4.0"
+export IRIX_PATCH=${IRIX_PATCH-$(command -v patch)}
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources"
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources"
+patched="$test_dir/sources/primitive-0.6.4.0"
+# The single Cabal condition must be the only change: implementation and all
+# compiler options for other platforms remain byte-for-byte upstream.
+sed 's/if !os(solaris) \&\& !os(irix)/if !os(solaris)/' "$patched/primitive.cabal" > "$test_dir/restored.cabal"
+cmp "$original/primitive.cabal" "$test_dir/restored.cabal"
+grep -F 'if !os(solaris) && !os(irix)' "$patched/primitive.cabal" >/dev/null
+cmp "$original/cbits/primitive-memops.h" "$patched/cbits/primitive-memops.h"
+cmp "$original/cbits/primitive-memops.c" "$patched/cbits/primitive-memops.c"
+printf '\nchanged\n' >> "$patched/primitive.cabal"
+status=0
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources" > "$test_dir/rejected.log" 2>&1 || status=$?
+[[ $status == 2 ]]
+echo 'PASS IRIX-only vectorization exclusion, unchanged implementation/options, idempotency and preimage refusal'

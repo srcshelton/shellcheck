@@ -1,0 +1,76 @@
+#!/usr/local/bin/bash
+# Qualify the private optimisation adapter before building the candidate.
+set -euo pipefail
+source "$(dirname "$0")/native-consumer-profile"
+case "$profile" in optimized|mipspro) ;; *) exit 2 ;; esac
+case "${1-}" in ''|--qualify-only) ;; *) echo 'usage: build-native-optimized [--qualify-only]' >&2; exit 2 ;; esac
+# A MIPSpro prototype may qualify without selecting a final dependency compiler.
+# Do not start dependencies until the immutable selection workflow is available.
+if [ "$profile" = mipspro ] && [ "${1-}" != --qualify-only ]; then
+    echo 'MIPSpro currently requires --qualify-only; final compiler selection is not sealed' >&2
+    exit 2
+fi
+mkdir -p "$job/artifacts" "$consumer/qualification" "$consumer/install/lib"
+finish() {
+    result=$?
+    trap - 0
+    printf '%s\n' "$result" > "$job/guest-status.tmp"
+    mv "$job/guest-status.tmp" "$job/guest-status"
+    exit "$result"
+}
+trap finish 0
+trap 'exit 130' 1 2 3 15
+export PATH="$run_root/ghc-7.10.3/.bootstrap-bin:/usr/local/bin:/usr/nekoware/bin:/usr/bin:/bin:/usr/sbin:/usr/bsd"
+export LC_ALL=C
+export IRIX_MIN_FREE_KIB=${IRIX_MIN_FREE_KIB-524288}
+unset GHC_PACKAGE_PATH GHC_ENVIRONMENT
+log="$job/artifacts/optimization-qualification.log"
+if [ -f "$consumer/optimization-qualified" ]; then
+    mv "$consumer/optimization-qualified" "$job/artifacts/optimization-qualified-before-$$"
+fi
+adapters=(native-shellcheck-cc native-shellcheck-link)
+if [ "$profile" = mipspro ]; then adapters+=(native-mipspro-cc); fi
+for adapter in "${adapters[@]}"; do
+    if [ ! -x "$consumer/harness/$adapter" ]; then
+        echo "Private compiler adapter is not executable: $adapter" >&2
+        exit 126
+    fi
+done
+printf '\nQualification attempt: %s (%s)\n' "$(date)" "$expected_profile" >> "$log"
+qualification_root="$consumer/qualification/$expected_profile"
+mkdir -p "$qualification_root"
+attempt="$qualification_root/attempt-$$"
+# Refuse collisions and never reuse an executable from an earlier attempt.
+mkdir "$attempt" || exit "$?"
+for name in runtime clock unix unix-bytestring bytestring-integer; do
+    output="$attempt/$name"
+    mkdir -p "$output"
+    printf 'optimised compiler qualification %s\n' "$name" > "$job/native-stage"
+    # Native Bash 3.2 can ignore a failing && list in a subshell under set -e.
+    # Check the entire result explicitly, and never accept absent/stale output.
+    if (
+        cd "$output" || exit "$?"
+        "$run_root/ghc-7.10.3/inplace/bin/ghc-stage1" \
+        --make "${optimization_ghc[@]}" -v -i -no-user-package-db \
+        "$run_root/repository/builders/irix/ghc-$name-smoke.hs" \
+        -odir . -hidir . -o run || exit "$?"
+        [ -x ./run ] || { echo 'Qualification compiler produced no executable' >&2; exit 1; }
+        ./run || exit "$?"
+    ) >> "$log" 2>&1; then
+        printf 'PASS %s (%s)\n' "$name" "$expected_profile" >> "$log"
+    else
+        result=$?
+        echo "Optimised qualification $name failed ($result); preserving $log" >&2
+        exit "$result"
+    fi
+done
+printf '%s\n' "$expected_profile" > "$consumer/optimization-qualified.tmp"
+date >> "$consumer/optimization-qualified.tmp"
+mv "$consumer/optimization-qualified.tmp" "$consumer/optimization-qualified"
+if [ "${1-}" = --qualify-only ]; then
+    echo "Five compile/link/run suites passed: $expected_profile; no dependencies started."
+    exit 0
+fi
+"$BASH" "$consumer/harness/build-native-dependencies" || exit "$?"
+printf 'optimised ShellCheck build\n' > "$job/native-stage"
+"$BASH" "$consumer/harness/build-native-shellcheck" || exit "$?"

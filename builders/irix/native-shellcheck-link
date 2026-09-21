@@ -1,0 +1,9 @@
+#!/usr/local/bin/bash
+# Compact only private consumer libraries before the validated GHC link driver.
+# IRIX ld32 otherwise exhausts its search-directory limit and loses system libs.
+set -eu
+source "$(dirname "$0")/native-consumer-profile"
+compiler="$run_root/ghc-7.10.3/.bootstrap-bin/gcc"
+if [ "$profile" != functional ]; then compiler="$consumer/harness/native-shellcheck-cc"; fi
+exec "$BASH" "$run_root/repository/builders/irix/collapse-library-search-paths" \
+    "$consumer/install/lib" "$consumer/.library-search" "$compiler" "$@"

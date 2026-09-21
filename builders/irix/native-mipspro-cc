@@ -1,0 +1,210 @@
+#!/usr/local/bin/bash
+# Explicit, fail-closed final-C adapter. No compiler fallback is allowed here.
+# The seed compiler, seed libraries and RTS remain the qualified GCC products.
+set -euo pipefail
+source "$(dirname "$0")/native-consumer-profile"
+[ "$profile" = mipspro ] || { echo 'MIPSpro requires its isolated profile' >&2; exit 2; }
+compiler=/bin/cc
+audit="$consumer/compiler-audit"
+mkdir -p "$audit"
+attempt="$audit/invocation-$$"
+mkdir "$attempt" || exit "$?"
+printf '%q\n' "$@" > "$attempt/input.args"
+reject() { echo "Rejected: $*" | tee -a "$attempt/translations" >&2; exit 2; }
+translate() { printf '%s\n' "$*" >> "$attempt/translations"; }
+export COMPILER_DEFAULTS_PATH="$consumer/compiler-config"
+[ -f "$COMPILER_DEFAULTS_PATH/compiler.defaults" ] || reject 'missing private compiler defaults'
+[ "$#" -gt 0 ] || reject 'no compiler arguments'
+unset SGI_CC SGI_ABI
+if [ "$#" = 1 ]; then
+    case "$1" in
+        --version|-version|-v) exec "$compiler" -version ;;
+        -dumpversion) "$compiler" -version; exit "$?" ;;
+    esac
+fi
+args=()
+headers=()
+sources=()
+source_indices=()
+assembler_sources=()
+merge=false
+compile=false
+nostdlib=false
+nodefaultlibs=false
+language=
+while [ "$#" -gt 0 ]; do
+    argument=$1
+    shift
+    case "$argument" in
+        -o|-I|-L|-D|-U)
+            [ "$#" -gt 0 ] || reject "missing argument for $argument"
+            args+=("$argument" "$1"); shift ;;
+        -include)
+            [ "$#" -gt 0 ] && [ -f "$1" ] || reject 'missing forced header'
+            headers+=("$1"); translate "-include $1 => explicit include translation unit"; shift ;;
+        -x)
+            [ "$#" -gt 0 ] || reject 'missing language'
+            case "$1" in c|assembler) language=$1 ;; *) reject "language $1" ;; esac
+            translate "-x $1 => suffix-independent source handling"; shift ;;
+        -fwrapv) translate '-fwrapv => disable unsafe wraparound and relational folding (runtime qualification required)' ;;
+        -fno-strict-aliasing) translate '-fno-strict-aliasing => OPT:alias=ANY' ;;
+        -fPIC|-fpic) translate "$argument => native N32 PIC default" ;;
+        -fsigned-char) args+=(-signed); translate '-fsigned-char => -signed' ;;
+        -O|-O0|-O1|-O2) translate "$argument => fixed qualified -O2 profile" ;;
+        -Wimplicit)
+            args+=(-diag_warning 1196,3322)
+            translate '-Wimplicit => native implicit-function and implicit-int diagnostics 1196,3322' ;;
+        -Wall) args+=(-fullwarn); translate '-Wall => -fullwarn' ;;
+        -v) args+=(-show); translate '-v with input => -show, not version-only' ;;
+        -mabi=n32) translate '-mabi=n32 => -n32' ;;
+        -Wl,-r) merge=true; args+=(-Wl,-r) ;;
+        -nostdlib) nostdlib=true; args+=("$argument") ;;
+        -nodefaultlibs) nodefaultlibs=true; args+=("$argument") ;;
+        -Wl,--hash-size=31|-Wl,--reduce-memory-overheads|-Wl,--build-id=none)
+            translate "$argument => omitted GNU linker metadata option" ;;
+        -Wl,-R,*) args+=("-Wl,-rpath,${argument#-Wl,-R,}"); translate "$argument => native rpath" ;;
+        -Wl,-u,*)
+            symbol=${argument#-Wl,-u,}
+            case "$symbol" in ''|*[!A-Za-z_0-9]*) reject 'invalid forced-link symbol' ;; esac
+            args+=("$argument") ;;
+        -Wl,-rpath,*|-Wl,-no_compact_rel) args+=("$argument") ;;
+        -c|-S|-E) compile=true; args+=("$argument") ;;
+        -I*|-L*|-l*|-D*|-U*|-g|-w|-n32|-mips4) args+=("$argument") ;;
+        -*) reject "unreviewed option $argument" ;;
+        *.c|*.hc)
+            source_indices+=("${#args[@]}")
+            sources+=("$argument")
+            args+=("$argument") ;;
+        *.s) assembler_sources+=("$argument"); args+=("$argument") ;;
+        *.o|*.a|*.so) args+=("$argument") ;;
+        *) reject "unreviewed input $argument" ;;
+    esac
+done
+if [ "$language" = assembler ] || [ "${#assembler_sources[@]}" -gt 0 ]; then
+    $compile && [ "${#assembler_sources[@]}" = 1 ] &&
+        [ "${#sources[@]}" = 0 ] && [ "${#headers[@]}" = 0 ] ||
+        reject 'assembler mode requires one assembly source and no C headers'
+    # GCC -x assembler (and lowercase .s) bypasses preprocessing. MIPSpro
+    # defaults to preprocessing .s, which can splice a generated .byte
+    # comment ending in backslash onto the following .byte directive and
+    # silently discard its data. Preserve the assembler input byte-for-byte.
+    args+=(-nocpp)
+    translate 'unpreprocessed assembly => -nocpp; preserve backslash-ended comments and following data'
+fi
+if $merge; then
+    $nostdlib && $nodefaultlibs && ! $compile || reject 'not a pure object merge'
+    merged=(-n32 -r)
+    skip=false
+    output_pending=false
+    for argument in "${args[@]}"; do
+        if $output_pending; then merged+=("$argument"); output_pending=false; continue; fi
+        if $skip; then skip=false; continue; fi
+        case "$argument" in
+            -I|-L|-D|-U) skip=true ;;
+            -I*|-L*|-D*|-U*|-nostdlib|-nodefaultlibs|-Wl,-r|-n32|-mips4) ;;
+            -o) merged+=("$argument"); output_pending=true ;;
+            *.o) merged+=("$argument") ;;
+            *) reject "unreviewed object-merge argument $argument" ;;
+        esac
+    done
+    translate 'pure relocatable merge => system ld -n32 -r, no startup libraries'
+    printf '%q\n' /usr/bin/ld "${merged[@]}" > "$attempt/output.args"
+    exec /usr/bin/ld "${merged[@]}"
+fi
+$nostdlib && reject 'nostdlib outside pure object merge'
+$nodefaultlibs && reject 'nodefaultlibs outside pure object merge'
+if ! $compile; then
+    # The unchanged GCC-built seed/RTS uses GCC helper routines. MIPSpro
+    # remains the final compiler/link driver; this is an explicit, frozen
+    # link dependency, not a fallback compiler or a seed rebuild.
+    support="$consumer/compiler-config/gcc-runtime"
+    verify_support() {
+        [ -f "$support/$1" ] && [ -f "$support/$2" ] || reject "missing qualified GCC seed support: $1"
+        actual=$(cksum "$support/$1" | awk '{print $1 " " $2}') || exit "$?"
+        [ "$actual" = "$(cat "$support/$2")" ] || reject "GCC seed support checksum mismatch: $1"
+        translate "qualified GCC seed support: $support/$1 ($actual)"
+    }
+    verify_support libgcc.a archive.cksum
+    verify_support crtbegin.o crtbegin.o.cksum
+    verify_support crtend.o crtend.o.cksum
+fi
+if [ "${#headers[@]}" -gt 0 ] || [ "$language" = c ]; then
+    [ "${#sources[@]}" = 1 ] || reject 'explicit C translation unit needs exactly one source'
+    unit="$attempt/input.c"
+    # This changes no source bytes or GNU annotations. Nested quoted includes
+    # retain their original source-directory lookup. Paths are quoted as C strings.
+    c_source=${sources[0]}
+    case "$c_source" in
+        *.hc)
+            cp "$c_source" "$attempt/original.hc"
+            /usr/nekoware/bin/perl "$consumer/harness/ghc710-mipspro-hc" \
+                "$attempt/original.hc" > "$attempt/lowered.c" || exit "$?"
+            c_source="$attempt/lowered.c"
+            translate 'GHC .hc => exact packed-scalar lowering; original retained'
+            ;;
+    esac
+    for path in ${headers[@]+"${headers[@]}"} "$c_source"; do
+        case "$path" in /*) ;; *) path="$PWD/$path" ;; esac
+        case "$path" in *$'\n'*|*$'\r'*) reject 'newline in include path' ;; esac
+        escaped=${path//\\/\\\\}
+        escaped=${escaped//\"/\\\"}
+        printf '#include "%s"\n' "$escaped" >> "$unit"
+    done
+    args[${source_indices[0]}]="$unit"
+fi
+if ! $compile; then
+    # Add startup files after source-index replacement. Match the GCC N32
+    # startfile/endfile/init/fini specification so unchanged seed constructors
+    # (notably GMP allocator registration) and destructors actually run.
+    args=("$support/crtbegin.o" "${args[@]}" "$support/libgcc.a"
+          "$support/crtend.o" -Wl,-init,__do_global_ctors -Wl,-fini,__do_global_dtors)
+fi
+target=(-n32 -mips4 -r14000 -c99 -O2 -TARG:madd=OFF
+    -OPT:alias=ANY:fold_unsafe_relops=OFF:wrap_around_unsafe_opt=OFF:roundoff=0:IEEE_arithmetic=1:IEEE_NaN_inf=ON)
+printf '%q\n' "$compiler" "-I$consumer/ghc-headers" "${args[@]}" "${target[@]}" > "$attempt/output.args"
+# GHC 7.10's cc_filter uses break to find the next GCC include-stack header.
+# Native MIPSpro diagnostics lack that delimiter, so the old compiler retains
+# the entire warning stream before emitting anything. Large generated units
+# can exhaust its N32 address space. Preserve every native stderr byte in the
+# immutable invocation audit, and send only a bounded notice/excerpt to GHC.
+# Compiler stdout (including -E output), options, input and exit status are
+# unchanged. This is diagnostic transport, not warning suppression or fallback.
+diagnostics="$attempt/compiler.stderr.gz"
+diagnostic_pipe="$attempt/compiler.stderr.pipe"
+compressor=/usr/sbin/gzip
+test -x "$compressor" || reject 'missing diagnostic compressor'
+mkfifo "$diagnostic_pipe" || exit "$?"
+"$compressor" -c < "$diagnostic_pipe" > "$diagnostics" &
+compressor_pid=$!
+status=0
+"$compiler" "-I$consumer/ghc-headers" "${args[@]}" "${target[@]}" 2> "$diagnostic_pipe" || status=$?
+capture_status=0
+wait "$compressor_pid" || capture_status=$?
+rm "$diagnostic_pipe" || exit "$?"
+printf '%s\n' "$status" > "$attempt/status" || exit "$?"
+printf '%s\n' "$capture_status" > "$attempt/diagnostic-status" || exit "$?"
+[ "$capture_status" = 0 ] || reject "diagnostic capture failed ($capture_status), compiler status $status"
+"$compressor" -t "$diagnostics" || reject 'diagnostic archive integrity failed'
+if [ -s "$diagnostics" ]; then
+    bytes=$(wc -c < "$diagnostics") || exit "$?"
+    printf 'MIPSpro exit %s: complete stderr retained (%s compressed bytes) at %s\n' "$status" "$bytes" "$diagnostics" >&2
+    if [ "$status" -ne 0 ]; then
+        "$compressor" -dc "$diagnostics" | /usr/nekoware/bin/perl -e '
+            binmode(STDIN); binmode(STDOUT);
+            $first=""; $last=""; $size=0;
+            while (1) {
+                $n=read(STDIN,$buf,8192); defined($n) or die "read: $!";
+                last unless $n;
+                $first.=substr($buf,0,8192-length($first)) if length($first)<8192;
+                $last.=$buf; $last=substr($last,-8192) if length($last)>8192;
+                $size+=$n;
+            }
+            print $first;
+            if ($size>8192) {
+                print "\n[remaining diagnostics retained in audit; final excerpt follows]\n";
+                print $size<16384 ? substr($last,16384-$size) : $last;
+            }
+        ' >&2 || exit "$?"
+    fi
+fi
+exit "$status"

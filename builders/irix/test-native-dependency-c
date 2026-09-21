@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set IRIX_TEST_PARENT to a durable session test directory}
+mkdir -p "$parent"
+test_dir=$(mktemp -d "$parent/dependency-c.XXXXXXXX")
+trap 'status=$?; trap - EXIT; rm -rf "$test_dir"; exit "$status"' EXIT
+export IRIX_RUN_ROOT="$test_dir" IRIX_CONSUMER_PROFILE=mipspro
+consumer="$test_dir/shellcheck-native-mipspro"
+mkdir -p "$consumer/harness" "$consumer/job" "$consumer/qualification" "$test_dir/ghc-7.10.3/inplace/bin" "$test_dir/sources"
+printf '%s\n' fuel-mips4-r14000-n32-mipspro744m-ghc7103-O2-v1 > "$consumer/build-profile"
+cp "$here/native-consumer-profile" "$here/DependencyCSmoke.hs" "$here/qualify-native-dependency-c" "$consumer/harness/"
+for spec in 'primitive-0.6.4.0:primitive-memops' 'text-1.2.3.1:cbits' 'hashable-1.3.0.0:fnv' 'aeson-1.4.7.1:unescape_string'; do
+    package=${spec%:*}; stem=${spec#*:}
+    mkdir -p "$test_dir/sources/$package/cbits"
+    printf 'mock C\n' > "$test_dir/sources/$package/cbits/$stem.c"
+done
+mkdir -p "$test_dir/sources/text-1.2.3.1/include"
+printf 'mock header\n' > "$test_dir/sources/primitive-0.6.4.0/cbits/primitive-memops.h"
+printf 'mock header\n' > "$test_dir/sources/text-1.2.3.1/include/text_cbits.h"
+cat > "$consumer/harness/native-shellcheck-cc" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+test "${FAIL_C-0}" = 0 || exit 31
+while [ "$#" -gt 0 ]; do
+    if [ "$1" = -o ]; then shift; printf 'object\n' > "$1"; exit 0; fi
+    shift
+done
+exit 2
+EOF
+cat > "$test_dir/ghc-7.10.3/inplace/bin/ghc-stage1" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+test "${FAIL_GHC-0}" = 0 || exit 32
+test "${OMIT_RUN-0}" = 0 || exit 0
+printf '#!/usr/bin/env bash\nexit %s\n' "${FAIL_RUN-0}" > run
+chmod +x run
+EOF
+chmod +x "$consumer/harness/native-shellcheck-cc" "$test_dir/ghc-7.10.3/inplace/bin/ghc-stage1"
+status=0
+bash "$consumer/harness/qualify-native-dependency-c" "$test_dir/sources" >/dev/null 2>&1 || status=$?
+test "$status" = 2 || exit 1
+test ! -f "$consumer/job/dependency-c-current" || exit 1
+cp "$consumer/build-profile" "$consumer/optimization-qualified"
+for mode in FAIL_C FAIL_GHC OMIT_RUN FAIL_RUN; do
+    case "$mode" in FAIL_C) expected=31 ;; FAIL_GHC) expected=32 ;; OMIT_RUN|FAIL_RUN) expected=1 ;; esac
+    status=0
+    env "$mode=1" bash "$consumer/harness/qualify-native-dependency-c" "$test_dir/sources" >/dev/null 2>&1 || status=$?
+    test "$status" = "$expected" || exit 1
+    test "$(cat "$consumer/job/dependency-c-status")" = "$expected" || exit 1
+    attempt=$(cat "$consumer/job/dependency-c-current")
+    test ! -f "$attempt/qualified" || exit 1
+done
+bash "$consumer/harness/qualify-native-dependency-c" "$test_dir/sources" >/dev/null || exit "$?"
+test "$(cat "$consumer/job/dependency-c-status")" = 0 || exit 1
+attempt=$(cat "$consumer/job/dependency-c-current")
+cmp "$consumer/build-profile" "$attempt/qualified" || exit 1
+test "$(wc -l < "$attempt/inputs.cksum")" -eq 7 || exit 1
+echo 'PASS dependency-C gate precondition, compiler/output/runtime failure propagation and fresh evidence'

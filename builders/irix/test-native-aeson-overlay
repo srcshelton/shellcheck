@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set IRIX_TEST_PARENT to a durable session test directory}
+original=${IRIX_AESON_SOURCE:?Set IRIX_AESON_SOURCE to the pinned unmodified aeson-1.4.7.1 tree}
+mkdir -p "$parent"
+test_dir=$(mktemp -d "$parent/aeson-overlay.XXXXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+mkdir "$test_dir/sources"
+cp -R "$original" "$test_dir/sources/aeson-1.4.7.1"
+export IRIX_PATCH=${IRIX_PATCH-$(command -v patch)}
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources"
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources"
+patched="$test_dir/sources/aeson-1.4.7.1"
+cpp=${CPP-cpp}
+options=(-traditional-cpp -P '-DMIN_VERSION_base(x,y,z)=1'
+    '-DMIN_VERSION_template_haskell(x,y,z)=0' '-DMIN_VERSION_unordered_containers(x,y,z)=1')
+for ghc in 710 900; do
+    "$cpp" "${options[@]}" -D__GLASGOW_HASKELL__="$ghc" -I"$original/include" \
+        "$original/Data/Aeson/Types/Internal.hs" | sed '/^[[:space:]]*$/d' > "$test_dir/original.$ghc"
+    "$cpp" "${options[@]}" -D__GLASGOW_HASKELL__="$ghc" -I"$patched/include" \
+        "$patched/Data/Aeson/Types/Internal.hs" | sed '/^[[:space:]]*$/d' > "$test_dir/normal.$ghc"
+    cmp "$test_dir/original.$ghc" "$test_dir/normal.$ghc"
+done
+"$cpp" "${options[@]}" -D__GLASGOW_HASKELL__=710 -DAESON_IRIX_NO_TH -I"$patched/include" \
+    "$patched/Data/Aeson/Types/Internal.hs" > "$test_dir/irix.hs"
+! grep -E 'LANGUAGE TemplateHaskell|Language.Haskell.TH.Syntax|instance TH.Lift' "$test_dir/irix.hs"
+grep -F 'instance Hashable Value where' "$test_dir/irix.hs" >/dev/null
+grep -F 'emptyArray = Array V.empty' "$test_dir/irix.hs" >/dev/null
+# A partially edited or differently revised tree must not be patched by guesswork.
+printf '\nchanged\n' >> "$patched/aeson.cabal"
+status=0
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources" > "$test_dir/rejected.log" 2>&1 || status=$?
+[[ $status == 2 ]]
+echo 'PASS exact preimage/postimage, idempotency, mismatch refusal, unchanged non-IRIX CPP and omitted IRIX TH'

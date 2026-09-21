@@ -1,0 +1,27 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set IRIX_TEST_PARENT to a durable session test directory}
+original=${IRIX_TEXT_SOURCE:?Set IRIX_TEXT_SOURCE to the pinned unmodified source tree}
+mkdir -p "$parent"
+test_dir=$(mktemp -d "$parent/text-overlay.XXXXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+mkdir "$test_dir/sources"
+cp -R "$original" "$test_dir/sources/text-1.2.3.1"
+export IRIX_PATCH=${IRIX_PATCH-$(command -v patch)}
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources"
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources"
+patched="$test_dir/sources/text-1.2.3.1/cbits/cbits.c"
+compiler=${CC-cc}
+# Normal platforms retain identical implementation after preprocessing;
+# compiler-specific blank lines around conditional includes are irrelevant.
+"$compiler" -E -P -I"$original/include" "$original/cbits/cbits.c" | sed '/^[[:space:]]*$/d' > "$test_dir/original.c"
+"$compiler" -E -P -I"$original/include" "$patched" | sed '/^[[:space:]]*$/d' > "$test_dir/patched.c"
+cmp "$test_dir/original.c" "$test_dir/patched.c"
+"$compiler" -fsyntax-only -I"$original/include" "$patched"
+"$compiler" -D__sgi -fsyntax-only -I"$original/include" "$patched"
+printf '\nchanged\n' >> "$patched"
+status=0
+bash "$here/apply-native-dependency-overlays" "$test_dir/sources" > "$test_dir/rejected.log" 2>&1 || status=$?
+[[ $status == 2 ]]
+echo 'PASS unchanged non-IRIX implementation, both header branches, idempotency and preimage refusal'

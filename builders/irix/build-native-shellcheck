@@ -1,0 +1,98 @@
+#!/usr/local/bin/bash
+# Functional consumer build. No compiler ladder rebuild or global installation.
+set -euo pipefail
+source "$(dirname "$0")/native-consumer-profile"
+if [ "$profile" != functional ]; then
+    selected_kind=gcc
+    if [ "$profile" = mipspro ]; then selected_kind=mipspro; fi
+    "$BASH" "$consumer/harness/select-native-compiler" --check "$selected_kind" >/dev/null || exit "$?"
+fi
+ghc_bin="$run_root/ghc-7.10.3/inplace/bin"
+setup="$consumer/bin/native-setup"
+db="$consumer/package.conf.d"
+log="$job/artifacts/shellcheck-native-build.log"
+mkdir -p "$job/artifacts" "$consumer/bin" "$consumer/home"
+finish()
+{
+    result=$?
+    trap - 0
+    printf '%s\n' "$result" > "$job/guest-status.tmp"
+    mv "$job/guest-status.tmp" "$job/guest-status"
+    if [ "$result" -ne 0 ]; then
+        echo "Native ShellCheck failed ($result); preserving source/build/log." >&2
+        tail -60 "$log" >&2 || :
+    fi
+    exit "$result"
+}
+trap finish 0
+trap 'exit 130' 1 2 3 15
+PATH="$run_root/ghc-7.10.3/.bootstrap-bin:$ghc_bin:/usr/local/bin:/usr/nekoware/bin:/usr/bin:/bin:/usr/sbin:/usr/bsd"
+export PATH
+export HOME="$consumer/home" LC_ALL=C
+unset GHC_PACKAGE_PATH GHC_ENVIRONMENT
+# Remove only our old readiness marker: a failed new build is never READY.
+rm -f "$consumer/native-ready"
+[ -s "$consumer/source/ShellCheck.cabal" ] && [ -s "$consumer/dependencies.plan" ]
+[ -x "$setup" ] && [ "$("$ghc_bin/ghc-stage1" --numeric-version)" = 7.10.3 ]
+options=(--with-compiler="$ghc_bin/ghc-stage1" --with-hc-pkg="$ghc_bin/ghc-pkg"
+    --with-hsc2hs="$ghc_bin/hsc2hs" --prefix="$consumer/install"
+    --package-db=clear --package-db=global --package-db="$db"
+    --flags=irix-legacy-ghc "${optimization_options[@]}" --disable-shared
+    --disable-library-profiling --disable-executable-profiling
+    --disable-library-for-ghci --disable-tests --disable-benchmarks
+    --disable-executable-stripping --disable-library-stripping
+    --ghc-option=-pgml --ghc-option="$consumer/harness/native-shellcheck-link")
+while IFS= read -r record || [ -n "$record" ]; do
+    [ -n "$record" ] || continue
+    package=${record%%|*}
+    case "$package" in ''|*[!a-zA-Z0-9.-]*) exit 2 ;; esac
+    [ -s "$consumer/completed/$package" ]
+    [ "$(cat "$consumer/completed/$package")" = "$record" ]
+    "$ghc_bin/ghc-pkg" --global-package-db="$db" --no-user-package-db \
+        field "$package" id >/dev/null
+    options+=("--constraint=${package%-*}==${package##*-}")
+done < "$consumer/dependencies.plan"
+cd "$consumer/source"
+available=$(df -k "$consumer" | tail -1 | awk '{print $(NF-2)}')
+min_free=${IRIX_MIN_FREE_KIB-524288}
+case "$available:$min_free" in *[!0-9:]*|:*|*:) exit 2 ;; esac
+[ "$available" -ge "$min_free" ] || { echo "Low space: $available KiB" >&2; exit 1; }
+printf '\nBuild attempt: %s\n' "$(date)" >> "$log"
+"$setup" Simple configure "${options[@]}" >> "$log" 2>&1
+"$setup" Simple build >> "$log" 2>&1
+binary="$consumer/source/dist/build/shellcheck/shellcheck"
+[ -x "$binary" ]
+"$binary" --version > "$consumer/native-version.txt" 2>> "$log"
+printf '%s\n' 'printf "%s\n" "native smoke"' > "$consumer/smoke-clean.sh"
+printf '%s\n' 'printf "%s\n" $1' > "$consumer/smoke-warning.sh"
+for dialect in irix-sh irix-ksh; do
+    "$binary" --norc --shell="$dialect" --format=json1 "$consumer/smoke-clean.sh" \
+        > "$consumer/smoke-$dialect-clean.json" 2>> "$log"
+    grep '"comments":[[:space:]]*\[\]' "$consumer/smoke-$dialect-clean.json" >/dev/null
+    status=0
+    "$binary" --norc --shell="$dialect" --format=json1 "$consumer/smoke-warning.sh" \
+        > "$consumer/smoke-$dialect-warning.json" 2>> "$log" || status=$?
+    [ "$status" -eq 1 ]
+    grep '"code":[[:space:]]*2086' "$consumer/smoke-$dialect-warning.json" >/dev/null
+done
+# The native dependency set must not invent SC2218 for earlier definitions
+# in pipeline components, nor suppress a real top-level forward call.
+printf '%s\n' 'f() { :; }; f | cat' > "$consumer/smoke-function-pipeline.sh"
+printf '%s\n' 'f; f() { :; }' > "$consumer/smoke-function-forward.sh"
+for dialect in irix-sh irix-ksh; do
+    "$binary" --norc --shell="$dialect" --format=json1 --include=SC2218 \
+        "$consumer/smoke-function-pipeline.sh" > "$consumer/smoke-$dialect-function-pipeline.json" 2>> "$log"
+    grep '"comments":[[:space:]]*\[\]' "$consumer/smoke-$dialect-function-pipeline.json" >/dev/null
+    status=0
+    "$binary" --norc --shell="$dialect" --format=json1 --include=SC2218 \
+        "$consumer/smoke-function-forward.sh" > "$consumer/smoke-$dialect-function-forward.json" 2>> "$log" || status=$?
+    [ "$status" -eq 1 ]
+    grep '"code":[[:space:]]*2218' "$consumer/smoke-$dialect-function-forward.json" >/dev/null
+done
+cp "$binary" "$consumer/bin/shellcheck.tmp"
+mv "$consumer/bin/shellcheck.tmp" "$consumer/bin/shellcheck"
+cksum "$consumer/bin/shellcheck" > "$consumer/native-binary.cksum"
+cp "$consumer/native-binary.cksum" "$consumer/native-ready.tmp"
+mv "$consumer/native-ready.tmp" "$consumer/native-ready"
+echo 'Native ShellCheck passes version, clean-script and diagnostic gates in both IRIX profiles.'
+echo 'READY for source-matched native/macOS corpus validation; not a release build.'

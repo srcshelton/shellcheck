@@ -1,0 +1,25 @@
+--- a/src/Math/NumberTheory/Logarithms.hs
++++ b/src/Math/NumberTheory/Logarithms.hs
+@@ -49,7 +49,12 @@
+ #endif
+ 
+ import GHC.Integer.Logarithms.Compat
+-#if MIN_VERSION_base(4,8,0) && defined(MIN_VERSION_integer_gmp)
++-- GHC 7.10 can also use integer-gmp 0.5, whose Natural representation is
++-- Integer-backed rather than NatS#/NatJ#. Keep the portable conversion path.
++#ifndef MIN_VERSION_integer_gmp
++#define MIN_VERSION_integer_gmp(x,y,z) 0
++#endif
++#if MIN_VERSION_base(4,8,0) && MIN_VERSION_integer_gmp(1,0,0)
+ import GHC.Integer.GMP.Internals (Integer (..))
+ import GHC.Natural
+ #endif
+@@ -323,7 +328,7 @@
+ #ifdef MIN_VERSION_ghc_bignum
+ naturalLog2# n = word2Int# (BN.naturalLog2# n)
+ #else
+-#if MIN_VERSION_base(4,8,0) && defined(MIN_VERSION_integer_gmp)
++#if MIN_VERSION_base(4,8,0) && MIN_VERSION_integer_gmp(1,0,0)
+ naturalLog2# (NatS# b) = wordLog2# b
+ naturalLog2# (NatJ# n) = integerLog2# (Jp# n)
+ #else

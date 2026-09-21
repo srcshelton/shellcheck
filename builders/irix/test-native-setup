@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(cd -- "$(dirname -- "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set IRIX_TEST_PARENT to a durable session test directory}
+mkdir -p "$parent"
+test_dir=$(mktemp -d "$parent/native-setup.XXXXXXXX")
+trap 'rm -rf "$test_dir"' EXIT
+mkdir -p "$test_dir/ghc-7.10.3/inplace/bin" "$test_dir/shellcheck-native/harness"
+cp "$here/NativeSetup.hs" "$test_dir/shellcheck-native/harness/NativeSetup.hs"
+cat > "$test_dir/ghc-7.10.3/inplace/bin/ghc-stage1" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+if [[ ${FAIL_COMPILE-0} != 0 ]]; then exit "$FAIL_COMPILE"; fi
+while [[ $# != 0 ]]; do
+    if [[ $1 == -o ]]; then cp "$FAKE_SETUP" "$2"; chmod +x "$2"; exit 0; fi
+    shift
+done
+exit 99
+EOF
+cat > "$test_dir/fake-setup" <<'EOF'
+#!/usr/bin/env bash
+set -eu
+printf '%s\n' "$*" >> "$FAKE_CALLS"
+if [[ $1 == "${FAIL_MODE-}" ]]; then exit 23; fi
+EOF
+chmod +x "$test_dir/ghc-7.10.3/inplace/bin/ghc-stage1" "$test_dir/fake-setup"
+export IRIX_RUN_ROOT="$test_dir" FAKE_SETUP="$test_dir/fake-setup" FAKE_CALLS="$test_dir/calls"
+bash "$here/bootstrap-native-setup" > "$test_dir/success.log" 2>&1
+[[ $(cat "$test_dir/job/guest-status") == 0 ]]
+grep -Fx 'Simple --help' "$FAKE_CALLS"
+grep -Fx 'Configure --help' "$FAKE_CALLS"
+for failure in compile Simple Configure; do
+    expected=23
+    status=0
+    if [[ $failure == compile ]]; then
+        expected=17
+        FAIL_COMPILE=17 bash "$here/bootstrap-native-setup" > "$test_dir/failure.log" 2>&1 || status=$?
+    else
+        FAIL_MODE="$failure" bash "$here/bootstrap-native-setup" > "$test_dir/failure.log" 2>&1 || status=$?
+    fi
+    [[ $status == "$expected" && $(cat "$test_dir/job/guest-status") == "$expected" ]]
+done
+echo 'PASS native Setup pilot success and compile/help failure propagation'

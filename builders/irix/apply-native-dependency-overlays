@@ -1,0 +1,115 @@
+#!/usr/local/bin/bash
+# Apply only the reviewed, exact-version private consumer overlays.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+source_root=${1:?Usage: apply-native-dependency-overlays SOURCES_DIRECTORY}
+patch_tool=${IRIX_PATCH-/usr/sbin/patch}
+fingerprint()
+{
+    cksum "$target/$1" | awk '{print $1 " " $2}'
+}
+apply_aeson()
+{
+    local target="$source_root/aeson-1.4.7.1"
+    local patch_file="$here/patches/aeson-1.4.7.1-irix-no-interpreter.patch"
+    local description internal
+    [ -d "$target" ] || return 0
+    description=$(fingerprint aeson.cabal)
+    internal=$(fingerprint Data/Aeson/Types/Internal.hs)
+    if [ "$description" = '3555160699 7337' ] && [ "$internal" = '2597166998 26991' ]; then
+        echo 'Aeson IRIX no-interpreter overlay already applied.'
+        return 0
+    fi
+    if [ "$description" != '2504479619 7098' ] || [ "$internal" != '629428281 26877' ]; then
+        echo 'Aeson overlay preimage mismatch; refusing to modify the tree.' >&2
+        exit 2
+    fi
+    (cd "$target" && "$patch_tool" -F0 -p1 --forward --batch < "$patch_file")
+    [ "$(fingerprint aeson.cabal)" = '3555160699 7337' ]
+    [ "$(fingerprint Data/Aeson/Types/Internal.hs)" = '2597166998 26991' ]
+    echo 'Applied Aeson IRIX no-interpreter overlay; runtime JSON code retained.'
+}
+apply_integer_logarithms()
+{
+    local target="$source_root/integer-logarithms-1.0.3.1"
+    local source_file=src/Math/NumberTheory/Logarithms.hs
+    local patch_file="$here/patches/integer-logarithms-1.0.3.1-legacy-gmp-natural.patch"
+    local current
+    [ -d "$target" ] || return 0
+    current=$(fingerprint "$source_file")
+    if [ "$current" = '3271985381 13073' ]; then
+        echo 'Integer-logarithms legacy-GMP overlay already applied.'
+        return 0
+    fi
+    if [ "$current" != '2826111232 12845' ]; then
+        echo 'Integer-logarithms overlay preimage mismatch; refusing to modify the tree.' >&2
+        exit 2
+    fi
+    (cd "$target" && "$patch_tool" -F0 -p1 --forward --batch < "$patch_file")
+    [ "$(fingerprint "$source_file")" = '3271985381 13073' ]
+    echo 'Applied integer-logarithms legacy-GMP representation guard.'
+}
+apply_primitive()
+{
+    local target="$source_root/primitive-0.6.4.0"
+    local patch_file="$here/patches/primitive-0.6.4.0-irix-gcc-options.patch"
+    local current
+    [ -d "$target" ] || return 0
+    current=$(fingerprint primitive.cabal)
+    if [ "$current" = '3670587363 2092' ]; then
+        echo 'Primitive IRIX compiler-options overlay already applied.'
+        return 0
+    fi
+    if [ "$current" != '2727022245 2079' ]; then
+        echo 'Primitive overlay preimage mismatch; refusing to modify the tree.' >&2
+        exit 2
+    fi
+    (cd "$target" && "$patch_tool" -F0 -p1 --forward --batch < "$patch_file")
+    [ "$(fingerprint primitive.cabal)" = '3670587363 2092' ]
+    echo 'Applied primitive IRIX exclusion of unsupported GCC vectorization option.'
+}
+apply_text()
+{
+    local target="$source_root/text-1.2.3.1"
+    local patch_file="$here/patches/text-1.2.3.1-irix-inttypes.patch"
+    local current
+    [ -d "$target" ] || return 0
+    current=$(fingerprint cbits/cbits.c)
+    if [ "${IRIX_CONSUMER_PROFILE-functional}" = mipspro ] && [ "$current" = '2216481543 8590' ]; then
+        echo 'Text MIPSpro pointer-arithmetic overlay already applied.'
+        return 0
+    fi
+    if [ "$current" = '1367117778 8540' ]; then
+        echo 'Text IRIX integer-types overlay already applied.'
+        return 0
+    fi
+    if [ "$current" != '4095624017 8408' ]; then
+        echo 'Text overlay preimage mismatch; refusing to modify the tree.' >&2
+        exit 2
+    fi
+    (cd "$target" && "$patch_tool" -F0 -p1 --forward --batch < "$patch_file")
+    [ "$(fingerprint cbits/cbits.c)" = '1367117778 8540' ]
+    echo 'Applied text IRIX integer-types header selection.'
+}
+apply_text_mipspro()
+{
+    [ "${IRIX_CONSUMER_PROFILE-functional}" = mipspro ] || return 0
+    local target="$source_root/text-1.2.3.1"
+    local patch_file="$here/patches/text-1.2.3.1-mipspro-pointer-arithmetic.patch"
+    local current
+    [ -d "$target" ] || return 0
+    current=$(fingerprint cbits/cbits.c)
+    [ "$current" != '2216481543 8590' ] || return 0
+    if [ "$current" != '1367117778 8540' ]; then
+        echo 'Text MIPSpro overlay preimage mismatch; refusing to modify the tree.' >&2
+        exit 2
+    fi
+    (cd "$target" && "$patch_tool" -F0 -p1 --forward --batch < "$patch_file") || exit "$?"
+    [ "$(fingerprint cbits/cbits.c)" = '2216481543 8590' ] || exit 2
+    echo 'Applied text MIPSpro byte-pointer arithmetic; offsets and algorithms unchanged.'
+}
+apply_aeson
+apply_integer_logarithms
+apply_primitive
+apply_text
+apply_text_mipspro

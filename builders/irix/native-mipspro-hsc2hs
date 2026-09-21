@@ -1,0 +1,25 @@
+#!/usr/local/bin/bash
+# Use the unchanged seed hsc2hs with a private, qualified portable template.
+set -euo pipefail
+source "$(dirname "$0")/native-consumer-profile"
+[ "$profile" = mipspro ] || exit 2
+template="$consumer/hsc2hs/template-hsc.h"
+[ "$(cksum "$template" | awk '{print $1 " " $2}')" = '415967841 5637' ] || exit 2
+compiler="$consumer/harness/native-shellcheck-cc"
+pending=
+for argument in "$@"; do
+    if [ -n "$pending" ]; then
+        [ "$argument" = "$compiler" ] || { echo "hsc2hs refuses another $pending" >&2; exit 2; }
+        pending=
+        continue
+    fi
+    case "$argument" in
+        -t|--template|--template=*|-t?*) echo 'hsc2hs template is immutable' >&2; exit 2 ;;
+        -c|--cc|-l|--ld) pending=$argument ;;
+        --cc=*|--ld=*) [ "${argument#*=}" = "$compiler" ] || exit 2 ;;
+        -c?*|-l?*) [ "${argument:2}" = "$compiler" ] || exit 2 ;;
+    esac
+done
+[ -z "$pending" ] || exit 2
+exec "$run_root/ghc-7.10.3/inplace/bin/hsc2hs" \
+    --template="$template" --cc="$compiler" --ld="$compiler" "$@"

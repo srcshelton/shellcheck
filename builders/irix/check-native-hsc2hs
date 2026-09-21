@@ -1,0 +1,29 @@
+#!/usr/local/bin/bash
+# Additional build-preprocessor receipt; existing compiler receipts stay intact.
+set -euo pipefail
+source "$(dirname "$0")/native-consumer-profile"
+[ "$profile" = mipspro ] || exit 2
+receipt="$consumer/hsc2hs/qualified"
+[ -d "$receipt" ] || { echo 'Native MIPSpro hsc2hs qualification missing' >&2; exit 2; }
+actual=$(cksum "$receipt/files.cksum") || exit "$?"
+read -r sum size path extra < "$receipt/manifest.cksum" || exit 2
+[ -z "$extra" ] && [ "$path" = "$receipt/files.cksum" ] || exit 2
+[ "$actual" = "$sum $size $path" ] || exit 2
+[ "$(cat "$receipt/status")" = 0 ] || exit 2
+[ "$(cat "$receipt/profile")" = "$expected_profile" ] || exit 2
+count=0
+while read -r sum size path extra; do
+    case "$sum:$size" in *[!0-9:]*|:*|*:) exit 2 ;; esac
+    [ -z "$extra" ] && [ -f "$path" ] || exit 2
+    case "$path" in "$consumer"/*|"$run_root/ghc-7.10.3/inplace/"*) ;; *) exit 2 ;; esac
+    actual=$(cksum "$path") || exit "$?"
+    [ "$actual" = "$sum $size $path" ] || { echo "Changed hsc2hs input: $path" >&2; exit 2; }
+    count=$((count + 1))
+done < "$receipt/files.cksum"
+[ "$count" -ge 12 ] || exit 2
+for required in "$consumer/hsc2hs/template-hsc.h" "$consumer/harness/native-mipspro-hsc2hs" \
+    "$consumer/harness/build-native-dependencies" "$consumer/harness/check-native-hsc2hs" \
+    "$receipt/status" "$receipt/profile" "$receipt/gates.log"; do
+    awk -v p="$required" 'NF == 3 && $3 == p {n++} END {exit n != 1}' "$receipt/files.cksum" || exit 2
+done
+grep -Fx 'PASS native hsc2hs template, generated outputs and MIPSpro configure' "$receipt/gates.log" >/dev/null || exit 2

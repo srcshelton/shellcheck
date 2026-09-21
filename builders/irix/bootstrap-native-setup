@@ -1,0 +1,31 @@
+#!/usr/local/bin/bash
+# Private native consumer pilot. No global installation or compiler rebuild.
+set -euo pipefail
+source "$(dirname "$0")/native-consumer-profile"
+ghc="$run_root/ghc-7.10.3/inplace/bin/ghc-stage1"
+source="$consumer/harness/NativeSetup.hs"
+log="$job/artifacts/shellcheck-native-setup.log"
+[ -x "$ghc" ] && [ -s "$source" ]
+mkdir -p "$consumer/bin" "$consumer/setup-build" "$consumer/home" "$job/artifacts"
+finish()
+{
+    result=$?
+    trap - 0
+    printf '%s\n' "$result" > "$job/guest-status.tmp"
+    mv "$job/guest-status.tmp" "$job/guest-status"
+    if [ "$result" -ne 0 ]; then
+        echo "ShellCheck native setup pilot failed ($result); retaining build/log." >&2
+        tail -60 "$log" >&2 || :
+    fi
+    exit "$result"
+}
+trap finish 0
+trap 'exit 130' 1 2 3 15
+PATH="$run_root/ghc-7.10.3/.bootstrap-bin:/usr/local/bin:/usr/nekoware/bin:/usr/bin:/bin:/usr/sbin:/usr/bsd"
+export PATH
+cd "$consumer/setup-build"
+env HOME="$consumer/home" "$ghc" --make -O0 -package Cabal \
+    "$source" -odir . -hidir . -o "$consumer/bin/native-setup" > "$log" 2>&1
+"$consumer/bin/native-setup" Simple --help >> "$log" 2>&1
+"$consumer/bin/native-setup" Configure --help >> "$log" 2>&1
+echo 'Native consumer Setup runner linked and both entry points passed.'

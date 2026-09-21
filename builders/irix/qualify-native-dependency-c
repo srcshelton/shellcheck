@@ -1,0 +1,46 @@
+#!/usr/local/bin/bash
+# Compile representative exact dependency C and exercise it through real GHC FFI.
+set -euo pipefail
+source "$(dirname "$0")/native-consumer-profile"
+case "$profile" in optimized|mipspro) ;; *) exit 2 ;; esac
+source_root=${1:?Usage: qualify-native-dependency-c PINNED_PROBE_SOURCES}
+test "$(sed -n '1p' "$consumer/optimization-qualified")" = "$expected_profile" || exit 2
+export PATH="$run_root/ghc-7.10.3/.bootstrap-bin:/usr/local/bin:/usr/nekoware/bin:/usr/bin:/bin:/usr/sbin:/usr/bsd"
+unset GHC_PACKAGE_PATH GHC_ENVIRONMENT
+attempt="$consumer/qualification/dependency-c-$$"
+mkdir "$attempt" || exit "$?"
+printf '%s\n' "$attempt" > "$job/dependency-c-current"
+finish() {
+    result=$?
+    trap - 0
+    printf '%s\n' "$result" > "$job/dependency-c-status"
+    exit "$result"
+}
+trap finish 0
+date
+available=$(df -k "$consumer" | tail -1 | awk '{print $(NF-2)}')
+case "$available" in ''|*[!0-9]*) exit 2 ;; esac
+test "$available" -ge 262144 || exit 1
+printf 'Free KiB: %s\n' "$available"
+cd "$attempt" || exit "$?"
+cp "$consumer/harness/DependencyCSmoke.hs" smoke.hs || exit "$?"
+for spec in 'primitive-0.6.4.0:primitive-memops' 'text-1.2.3.1:cbits' 'hashable-1.3.0.0:fnv' 'aeson-1.4.7.1:unescape_string'; do
+    package=${spec%:*}
+    stem=${spec#*:}
+    cksum "$source_root/$package/cbits/$stem.c" >> inputs.cksum || exit "$?"
+    "$consumer/harness/native-shellcheck-cc" -c \
+        -I"$consumer/ghc-headers" -I"$source_root/$package/include" \
+        -I"$source_root/$package/cbits" "$source_root/$package/cbits/$stem.c" \
+        -o "$stem.o" || exit "$?"
+    test -s "$stem.o" || exit 1
+    printf 'PASS dependency C compile %s\n' "$package"
+done
+cksum smoke.hs "$source_root/primitive-0.6.4.0/cbits/primitive-memops.h" \
+    "$source_root/text-1.2.3.1/include/text_cbits.h" >> inputs.cksum || exit "$?"
+"$run_root/ghc-7.10.3/inplace/bin/ghc-stage1" --make "${optimization_ghc[@]}" \
+    -v -i -no-user-package-db smoke.hs primitive-memops.o cbits.o fnv.o unescape_string.o \
+    -odir . -hidir . -o run || exit "$?"
+test -x ./run || exit 1
+./run || exit "$?"
+printf '%s\n' "$expected_profile" > "$attempt/qualified"
+echo 'PASS representative dependency C/FFI qualification'

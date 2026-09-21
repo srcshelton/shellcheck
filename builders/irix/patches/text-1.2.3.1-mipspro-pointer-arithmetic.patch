@@ -1,0 +1,19 @@
+diff -ur original/cbits/cbits.c modified/cbits/cbits.c
+--- original/cbits/cbits.c	2026-09-18 21:46:02.080484000 +0100
++++ modified/cbits/cbits.c	2026-09-18 21:46:02.245018418 +0100
+@@ -19,13 +19,13 @@
+ void _hs_text_memcpy(void *dest, size_t doff, const void *src, size_t soff,
+ 		     size_t n)
+ {
+-  memcpy(dest + (doff<<1), src + (soff<<1), n<<1);
++  memcpy((char *)dest + (doff<<1), (const char *)src + (soff<<1), n<<1);
+ }
+ 
+ int _hs_text_memcmp(const void *a, size_t aoff, const void *b, size_t boff,
+ 		    size_t n)
+ {
+-  return memcmp(a + (aoff<<1), b + (boff<<1), n<<1);
++  return memcmp((const char *)a + (aoff<<1), (const char *)b + (boff<<1), n<<1);
+ }
+ 
+ #define UTF8_ACCEPT 0

@@ -1,0 +1,148 @@
+#!/usr/bin/env bash
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set a durable session test parent}
+mkdir -p "$parent"
+if command -v mktemp >/dev/null 2>&1; then
+    fixture=$(mktemp -d "$parent/mipspro-adapter.XXXXXXXX")
+else
+    fixture="$parent/mipspro-adapter.$$"
+    mkdir "$fixture" || exit "$?"
+fi
+trap 'rm -rf "$fixture"' EXIT
+export IRIX_RUN_ROOT="$fixture" IRIX_CONSUMER_PROFILE=mipspro
+export FAKE_CC="$fixture/mock-cc" FAKE_LD="$fixture/mock-cc" FAKE_ARGS="$fixture/args"
+candidate="$fixture/shellcheck-native-mipspro"
+mkdir -p "$candidate/harness" "$candidate/compiler-config"
+printf '%s\n' fuel-mips4-r14000-n32-mipspro744m-ghc7103-O2-v1 > "$candidate/build-profile"
+printf 'fixture defaults\n' > "$candidate/compiler-config/compiler.defaults"
+mkdir "$candidate/compiler-config/gcc-runtime"
+runtime="$candidate/compiler-config/gcc-runtime/libgcc.a"
+printf 'mock runtime archive\n' > "$runtime"
+cksum "$runtime" | awk '{print $1 " " $2}' > "$candidate/compiler-config/gcc-runtime/archive.cksum"
+for name in crtbegin.o crtend.o; do
+    printf 'mock %s\n' "$name" > "$candidate/compiler-config/gcc-runtime/$name"
+    cksum "$candidate/compiler-config/gcc-runtime/$name" | awk '{print $1 " " $2}' > "$candidate/compiler-config/gcc-runtime/$name.cksum"
+done
+cp "$here/native-consumer-profile" "$candidate/harness/"
+test_compressor=$(command -v gzip)
+# Only compiler executable paths are substituted in this isolated test copy.
+sed -e 's|^compiler=/bin/cc$|compiler="$FAKE_CC"|' \
+    -e "s|^compressor=/usr/sbin/gzip$|compressor=$test_compressor|" \
+    -e 's|exec /usr/bin/ld |exec "$FAKE_LD" |' \
+    -e 's|/usr/nekoware/bin/perl|perl|g' \
+    "$here/native-mipspro-cc" > "$candidate/harness/native-mipspro-cc"
+cat > "$FAKE_CC" <<'MOCK'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$FAKE_ARGS"
+if [ -n "${FAKE_STDERR-}" ]; then cat "$FAKE_STDERR" >&2; fi
+if [ -n "${FAKE_STDOUT-}" ]; then cat "$FAKE_STDOUT"; fi
+exit "${FAKE_STATUS-0}"
+MOCK
+chmod +x "$FAKE_CC"
+adapter="$candidate/harness/native-mipspro-cc"
+printf '#define INCLUDED 1\n' > "$fixture/header space.h"
+printf 'int value = INCLUDED;\n' > "$fixture/input space.c"
+bash "$adapter" -v -x c -include "$fixture/header space.h" -O0 -fwrapv \
+    -fno-strict-aliasing "$fixture/input space.c" -o "$fixture/output space"
+grep -Fx -- -show "$FAKE_ARGS" >/dev/null || exit 1
+grep -Fx -- "$fixture/output space" "$FAKE_ARGS" >/dev/null || exit 1
+grep -Fx -- -r14000 "$FAKE_ARGS" >/dev/null || exit 1
+grep -Fx -- -O2 "$FAKE_ARGS" >/dev/null || exit 1
+grep -Fx -- "$runtime" "$FAKE_ARGS" >/dev/null || exit 1
+unit=$(grep '/compiler-audit/invocation-.*/input.c$' "$FAKE_ARGS")
+grep -Fx -- "#include \"$fixture/header space.h\"" "$unit" >/dev/null || exit 1
+grep -Fx -- "#include \"$fixture/input space.c\"" "$unit" >/dev/null || exit 1
+bash "$adapter" -v
+test "$(cat "$FAKE_ARGS")" = -version || exit 1
+bash "$adapter" -Wimplicit -c "$fixture/input space.c"
+! grep -Fx -- "$runtime" "$FAKE_ARGS" >/dev/null || exit 1
+grep -Fx -- -diag_warning "$FAKE_ARGS" >/dev/null || exit 1
+grep -Fx -- 1196,3322 "$FAKE_ARGS" >/dev/null || exit 1
+! grep -Fx -- -fullwarn "$FAKE_ARGS" >/dev/null || exit 1
+bash "$adapter" -Wall -c "$fixture/input space.c"
+grep -Fx -- -fullwarn "$FAKE_ARGS" >/dev/null || exit 1
+! grep -Fx -- -nocpp "$FAKE_ARGS" >/dev/null || exit 1
+printf '.byte 1 # backslash\\\n.byte 2\n' > "$fixture/input space.s"
+bash "$adapter" -x assembler -c "$fixture/input space.s" -o "$fixture/asm.o"
+grep -Fx -- -nocpp "$FAKE_ARGS" >/dev/null || exit 1
+grep -Fx -- "$fixture/input space.s" "$FAKE_ARGS" >/dev/null || exit 1
+bash "$adapter" -c "$fixture/input space.s" -o "$fixture/asm.o"
+grep -Fx -- -nocpp "$FAKE_ARGS" >/dev/null || exit 1
+status=0
+bash "$adapter" -x assembler -include "$fixture/header space.h" -c "$fixture/input space.s" >/dev/null 2>&1 || status=$?
+test "$status" = 2 || exit 1
+status=0
+bash "$adapter" -x assembler -c "$fixture/input space.c" >/dev/null 2>&1 || status=$?
+test "$status" = 2 || exit 1
+bash "$adapter" -Wl,-u,symbol_123 one.o -lone -ltwo -lone -o output
+test "$(grep '^-l' "$FAKE_ARGS")" = $'-lone\n-ltwo\n-lone' || exit 1
+grep -Fx -- -Wl,-init,__do_global_ctors "$FAKE_ARGS" >/dev/null || exit 1
+grep -Fx -- -Wl,-fini,__do_global_dtors "$FAKE_ARGS" >/dev/null || exit 1
+test "$(grep -E 'crtbegin.o$|^one.o$|libgcc.a$|crtend.o$' "$FAKE_ARGS")" = "$(printf '%s\n' "$candidate/compiler-config/gcc-runtime/crtbegin.o" one.o "$runtime" "$candidate/compiler-config/gcc-runtime/crtend.o")" || exit 1
+for name in crtbegin.o crtend.o; do
+    mv "$candidate/compiler-config/gcc-runtime/$name" "$candidate/compiler-config/gcc-runtime/$name.saved"
+    status=0
+    bash "$adapter" one.o -o output >/dev/null 2>&1 || status=$?
+    test "$status" = 2 || exit 1
+    mv "$candidate/compiler-config/gcc-runtime/$name.saved" "$candidate/compiler-config/gcc-runtime/$name"
+done
+bash "$adapter" -Wl,-r -nostdlib -nodefaultlibs -I headers one.o two.o -o "$fixture/merged without suffix"
+test "$(cat "$FAKE_ARGS")" = "$(printf '%s\n' -n32 -r one.o two.o -o "$fixture/merged without suffix")" || exit 1
+mv "$runtime" "$runtime.saved"
+status=0
+bash "$adapter" one.o -o output >/dev/null 2>&1 || status=$?
+test "$status" = 2 || exit 1
+# Queries and pure relocatable merges never require/link the runtime archive.
+bash "$adapter" -v
+bash "$adapter" -Wl,-r -nostdlib -nodefaultlibs one.o -o merged
+mv "$runtime.saved" "$runtime"
+printf 'changed archive\n' >> "$runtime"
+status=0
+bash "$adapter" one.o -o output >/dev/null 2>&1 || status=$?
+test "$status" = 2 || exit 1
+for option in -Ofast -ffast-math -mabi=64 -fstrict-aliasing -unreviewed -Wl,-r; do
+    status=0
+    bash "$adapter" "$option" input.c >/dev/null 2>&1 || status=$?
+    test "$status" = 2 || exit 1
+done
+status=0
+FAKE_STATUS=37 bash "$adapter" -c "$fixture/input space.c" || status=$?
+test "$status" = 37 || exit 1
+# Preserve complete multi-megabyte diagnostics outside GHC, bounded forwarding,
+# exact failure status, and stdout semantics for preprocessing/queries.
+perl -e 'print "first diagnostic\n"; print "warning record " x 200000; print "\nlast diagnostic\n";' > "$fixture/large-stderr"
+printf 'preprocessed stdout must be unchanged\n' > "$fixture/compiler-stdout"
+FAKE_STDERR="$fixture/large-stderr" FAKE_STDOUT="$fixture/compiler-stdout" \
+    bash "$adapter" -E "$fixture/input space.c" > "$fixture/stdout" 2> "$fixture/stderr" || exit "$?"
+cmp "$fixture/stdout" "$fixture/compiler-stdout" || exit 1
+test "$(wc -c < "$fixture/stderr")" -lt 2048 || exit 1
+unit=$(sed -n 's|^MIPSpro exit .* at \(.*\)/compiler.stderr.gz$|\1|p' "$fixture/stderr")
+gzip -dc "$unit/compiler.stderr.gz" > "$fixture/recovered-stderr" || exit "$?"
+cmp "$fixture/large-stderr" "$fixture/recovered-stderr" || exit 1
+test "$(cat "$unit/diagnostic-status")" = 0 || exit 1
+test ! -e "$unit/compiler.stderr.pipe" || exit 1
+test "$(cat "$unit/status")" = 0 || exit 1
+status=0
+FAKE_STDERR="$fixture/large-stderr" FAKE_STDOUT="$fixture/compiler-stdout" FAKE_STATUS=37 \
+    bash "$adapter" -c "$fixture/input space.c" > "$fixture/stdout" 2> "$fixture/stderr" || status=$?
+test "$status" = 37 || exit 1
+test "$(wc -c < "$fixture/stderr")" -lt 18000 || exit 1
+grep -F 'first diagnostic' "$fixture/stderr" >/dev/null || exit 1
+grep -F 'last diagnostic' "$fixture/stderr" >/dev/null || exit 1
+unit=$(sed -n 's|^MIPSpro exit .* at \(.*\)/compiler.stderr.gz$|\1|p' "$fixture/stderr")
+gzip -dc "$unit/compiler.stderr.gz" > "$fixture/recovered-stderr" || exit "$?"
+cmp "$fixture/large-stderr" "$fixture/recovered-stderr" || exit 1
+test "$(cat "$unit/diagnostic-status")" = 0 || exit 1
+test ! -e "$unit/compiler.stderr.pipe" || exit 1
+test "$(cat "$unit/status")" = 37 || exit 1
+cmp "$fixture/stdout" "$fixture/compiler-stdout" || exit 1
+printf '#!/usr/bin/env bash\ncat >/dev/null\nexit 23\n' > "$fixture/failed-compressor"
+chmod +x "$fixture/failed-compressor"
+sed "s|^compressor=.*$|compressor=$fixture/failed-compressor|" "$adapter" > "$candidate/harness/failed-capture-adapter"
+status=0
+FAKE_STDERR="$fixture/large-stderr" bash "$candidate/harness/failed-capture-adapter" -c "$fixture/input space.c" > "$fixture/stdout" 2> "$fixture/stderr" || status=$?
+test "$status" = 2 || exit 1
+grep -F 'diagnostic capture failed (23), compiler status 0' "$fixture/stderr" >/dev/null || exit 1
+test ! -e "$fixture/shellcheck-native" || exit 1
+echo 'PASS MIPSpro argument boundaries, header translation, unpreprocessed assembly, queries, library order, frozen seed runtime, pure merge, rejection, exact status and bounded lossless diagnostic capture'

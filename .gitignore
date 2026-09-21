@@ -27,3 +27,4 @@ stack.yaml.lock
 ### misc ###
 /shellcheck.1
 /.worktrees/
+/builders/irix/__pycache__/
