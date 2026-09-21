@@ -1,3 +1,11 @@
+## Unreleased
+### Added
+- SC3070: diagnose unsupported `$((expression))` arithmetic expansion in
+  `irix-sh`, while preserving IRIX ksh support and native arithmetic commands.
+- SC3071: diagnose C-style hexadecimal arithmetic constants in both IRIX
+  profiles; native shells require `base#digits`, such as `16#1a`.
+
+
 ## v0.11.0-irix.9 - 2026-09-11
 ### Fixed
 - SC2337 preserves suppressions of disabled optional diagnostics, including

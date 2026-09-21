@@ -105,6 +105,15 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     *irix-sh* models IRIX `/sbin/sh`; *irix-ksh* models the same IRIX shell
     executable when invoked in Korn-shell mode.
 
+    IRIX sh does not evaluate `$(command)` or `$((expression))` expansions
+    (SC3068 and SC3070). Use legacy backticks for command substitution, and
+    **let** or a `(( expression ))` command to perform arithmetic before
+    expanding the result variable. IRIX ksh supports both expansion forms.
+
+    Both IRIX shells require `base#digits` for hexadecimal arithmetic constants
+    (for example, `16#1a` rather than `0x1a`). SC3071 diagnoses literal C-style
+    hexadecimal constants in arithmetic contexts, not ordinary string values.
+
     In both IRIX profiles, nested double quotes in a double-quoted parameter expansion
     can expose literal spaces or shell operators. For example,
     `"${args%%"$1 "*}"` is invalid, while `"${args%%"$1" *}"` is valid.

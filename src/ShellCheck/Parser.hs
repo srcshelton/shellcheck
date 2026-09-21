@@ -1721,7 +1721,7 @@ readDollarExp quoted = arithmetic <|> readDollarExpansion <|> readDollarBracket 
         irix <- isIrixShell
         parseNoteAt pos ErrorC 1102 $
             if irix
-            then "IRIX sh does not implement $(command substitution). For $((arithmetics)), fix the parsing errors."
+            then "IRIX sh supports neither $(command substitution) nor $((arithmetic expansion)). Use backticks or a let command."
             else "Shells disambiguate $(( differently or not at all. For $(command substitution), add space after $( . For $((arithmetics)), fix parsing errors.")
 
 prop_readDollarSingleQuote = isOk readDollarSingleQuote "$'foo\\\'lol'"

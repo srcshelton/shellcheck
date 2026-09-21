@@ -65,6 +65,8 @@ checks = [
     ,checkBangAfterPipe
     ,checkNegatedUnaryOps
     ,checkIrixCommandSubstitution
+    ,checkIrixArithmeticExpansion
+    ,checkIrixHexArithmetic
     ]
 
 testChecker (ForShell _ t) =
@@ -94,6 +96,49 @@ checkIrixCommandSubstitution = ForShell [IrixSh] f
     f (T_DollarExpansion id _) =
         err id 3068 "In IRIX sh, $(..) is not command substitution. Use legacy backticks."
     f _ = return ()
+
+
+prop_checkIrixArithmeticExpansion1 = verify checkIrixArithmeticExpansion "value=$((value + 1))"
+prop_checkIrixArithmeticExpansion2 = verify checkIrixArithmeticExpansion "value=\"$((value + 1))\""
+prop_checkIrixArithmeticExpansion3 = verifyNot checkIrixArithmeticExpansion "let \"value = value + 1\""
+prop_checkIrixArithmeticExpansion4 = verifyNot checkIrixArithmeticExpansion "((value = value + 1))"
+prop_checkIrixArithmeticExpansion5 = verifyNot checkIrixArithmeticExpansion "echo '$((value + 1))'"
+checkIrixArithmeticExpansion = ForShell [IrixSh] f
+  where
+    f (T_DollarArithmetic id _) =
+        err id 3070 "IRIX sh does not evaluate $((..)). Use let or ((..)) to assign a result, then expand the variable."
+    f _ = return ()
+
+
+prop_checkIrixHexArithmetic1 = verify checkIrixHexArithmetic "let 'number = 0x1a'"
+prop_checkIrixHexArithmetic2 = verify checkIrixHexArithmetic "((number = 0X1A))"
+prop_checkIrixHexArithmetic3 = verify checkIrixHexArithmetic "let '(features & ~0x1a) == 0'"
+prop_checkIrixHexArithmetic4 = verifyNot checkIrixHexArithmetic "let 'number = 16#1a'"
+prop_checkIrixHexArithmetic5 = verifyNot checkIrixHexArithmetic "word=1a; let \"number = 16#${word}\""
+prop_checkIrixHexArithmetic6 = verifyNot checkIrixHexArithmetic "number=0x1a; print \"$number\""
+prop_checkIrixHexArithmetic7 = verify checkIrixHexArithmetic "word=1a; let \"number = 0x${word}\""
+prop_checkIrixHexArithmetic8 = verify checkIrixHexArithmetic "echo ${values[0X1A]}"
+prop_checkIrixHexArithmetic9 = verifyNot checkIrixHexArithmetic "echo ${values[16#1a]}"
+prop_checkIrixHexArithmetic10 = verifyNot checkIrixHexArithmetic "echo ${value:-0x1a}"
+checkIrixHexArithmetic = ForShell [IrixSh, IrixKsh] f
+  where
+    f t@(TA_Expansion id _)
+        | cStylePrefix $ getLiteralStringDef "\0" t = unsupported id
+    -- Parameter-expansion indices are retained as text, not arithmetic ASTs.
+    -- Restrict this fallback to a complete literal hexadecimal index; do not
+    -- infer numeric values from variables or inspect ordinary expansion words.
+    f (T_DollarBraced id _ body)
+        | Just word <- getLiteralString body
+        , '[':rest <- getBracedModifier word
+        , (index, ']':_) <- break (== ']') rest
+        , let value = dropWhileEnd isSpace $ dropWhile isSpace index
+        , cStylePrefix value
+        , let digits = drop 2 value
+        , not (null digits) && all isHexDigit digits = unsupported id
+    f _ = return ()
+    cStylePrefix value = any (`isPrefixOf` value) ["0x", "0X"]
+    unsupported id =
+        err id 3071 "IRIX sh/ksh do not support C-style hexadecimal arithmetic constants. Use base#digits, e.g. 16#1a instead of 0x1a."
 
 
 prop_checkBashisms = verify checkBashisms "while read a; do :; done < <(a)"

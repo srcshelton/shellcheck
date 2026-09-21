@@ -453,6 +453,57 @@ prop_irixStillDiagnosesUnbracedArray =
     1087 `elem` checkIrix "echo \"$array[0]\""
 prop_irixRejectsDollarCommandSubstitution =
     3068 `elem` checkIrix "value=$(echo hi)"
+prop_irixRejectsArithmeticExpansion = conjoin
+    [ counterexample source $ 3070 `elem` checkIrix source
+    | source <- [ "line=1; line=$((line + 1)); echo \"$line\""
+                , "line=1; line=\"$((line + 1))\"; echo \"$line\""
+                , "consumed=0; text=abc; newline=1; consumed=$((consumed + ${#text} + newline))"
+                , "echo $((1 + 1))"
+                , "cat <<EOF\n$((1 + 1))\nEOF"
+                ]]
+prop_irixArithmeticExpansionIsProfileSpecific = conjoin
+    [ counterexample shell $ 3070 `notElem` check
+        ("# shellcheck shell=" ++ shell ++ "\necho $((1 + 1))")
+    | shell <- ["sh", "bash", "dash", "ksh", "busybox", "irix-ksh"]]
+prop_irixAcceptsArithmeticCommands = conjoin
+    [ counterexample source $ 3070 `notElem` checkIrix source
+    | source <- [ "line=1; let \"line = line + 1\"; echo \"$line\""
+                , "line=1; ((line = line + 1)); echo \"$line\""
+                , "echo '$((1 + 1))'"
+                , "cat <<'EOF'\n$((1 + 1))\nEOF"
+                ]]
+prop_irixArithmeticExpansionCanBeDisabled =
+    3070 `notElem` checkIrix "# shellcheck disable=SC3070\necho $((1 + 1))"
+prop_irixRejectsCStyleHexArithmetic = conjoin
+    [ counterexample (shell ++ ": " ++ source) $ 3071 `elem` check
+        ("# shellcheck shell=" ++ shell ++ "\n" ++ source)
+    | shell <- ["irix-sh", "irix-ksh"]
+    , source <- [ "features=26; let '(features & ~0x1a) == 0'"
+                , "let 'number = 0X1A'"
+                , "((number = 0x1a))"
+                , "((number = -0x1a))"
+                , "echo ${values[0x1a]}"
+                , "word=1a; let \"number = 0x${word}\""
+                ]]
+prop_irixHexArithmeticDoesNotAffectOtherShells = conjoin
+    [ counterexample shell $ 3071 `notElem` check
+        ("# shellcheck shell=" ++ shell ++ "\necho $((0x1a))")
+    | shell <- ["sh", "bash", "dash", "ksh", "busybox"]]
+prop_irixAcceptsBaseHashAndHexStrings = conjoin
+    [ counterexample (shell ++ ": " ++ source) $ 3071 `notElem` check
+        ("# shellcheck shell=" ++ shell ++ "\n" ++ source)
+    | shell <- ["irix-sh", "irix-ksh"]
+    , source <- [ "let 'number = 16#1a'"
+                , "word=ffffffff; let \"number = 16#${word}\""
+                , "let '(features & ~26) == 0'"
+                , "number=0x1a; print \"$number\""
+                , "print '0x1a'"
+                , "echo ${value:-0x1a} ${values[16#1a]}"
+                ]]
+prop_irixDecimalLetReferencesVariable =
+    2034 `notElem` checkIrix "features=26; let '(features & ~26) == 0'"
+prop_irixHexArithmeticCanBeDisabled =
+    3071 `notElem` checkIrix "# shellcheck disable=SC3071\nlet 'number = 0x1a'"
 prop_irixRejectsQuotedRemovalDelimiters =
     conjoin [counterexample (name ++ ": " ++ source) $ 3069 `elem` checkProfile source
             | (name, checkProfile) <- [("irix-sh", checkIrix), ("irix-ksh", checkIrixKsh)]
