@@ -2582,14 +2582,41 @@ prop_checkSingleQuotedCasePatterns3 = verify checkSingleQuotedCasePatterns "case
 prop_checkSingleQuotedCasePatterns4 = verifyNot checkSingleQuotedCasePatterns "case $var in $value) echo yes;; esac"
 prop_checkSingleQuotedCasePatterns5 = verifyNot checkSingleQuotedCasePatterns "case $var in 'val'*) echo yes;; esac"
 prop_checkSingleQuotedCasePatterns6 = verifyNot checkSingleQuotedCasePatterns "case $var in '*') echo yes;; esac"
+prop_checkSingleQuotedCasePatternsDynamic = verifyNot checkSingleQuotedCasePatterns "case $var in *[${controls}]*) :;; esac"
+prop_checkSingleQuotedCasePatternsDynamicNegated = verifyNot checkSingleQuotedCasePatterns "case $var in *[!${controls}]*) :;; esac"
+prop_checkSingleQuotedCasePatternsDynamicMixed = verifyNot checkSingleQuotedCasePatterns "case $var in *[a-z${controls}]*) :;; esac"
+prop_checkSingleQuotedCasePatternsDynamicLeadingBracket = verifyNot checkSingleQuotedCasePatterns "case $var in *[]${controls}]*) :;; esac"
+prop_checkSingleQuotedCasePatternsStaticClass = verifyNot checkSingleQuotedCasePatterns "case $var in *[[:alpha:]]*) :;; esac"
+prop_checkSingleQuotedCasePatternsLiteralBracket = verify checkSingleQuotedCasePatterns "case $var in [) :;; esac"
+prop_checkSingleQuotedCasePatternsOutsideClass = verify checkSingleQuotedCasePatterns "case $var in prefix[${controls}]suffix) :;; esac"
 checkSingleQuotedCasePatterns _ (T_CaseExpression _ _ cases) =
     mapM_ checkPattern [pattern | (_, patterns, _) <- cases, pattern <- patterns]
   where
-    checkPattern (T_NormalWord _ parts) = mapM_ checkPart parts
+    checkPattern (T_NormalWord _ parts) = mapM_ warnLiteral $
+        nub $ map fst $ outsideBrackets $ concatMap literalChars parts
     checkPattern _ = return ()
-    checkPart (T_Literal id value)
-        | not (null value) = style id 2340 "Prefer single quotes for constant portions of case patterns."
-    checkPart _ = return ()
+    warnLiteral id = style id 2340 "Prefer single quotes for constant portions of case patterns."
+
+    -- Static classes are T_Glob, but a class containing an expansion is split
+    -- across literal and expansion tokens. Its brackets, negation and ranges
+    -- must remain active. Skip these possible classes without assuming the
+    -- expansion's value, retaining advice for literal prefixes and suffixes.
+    literalChars (T_Literal id value) = map (Just . (,) id) value
+    literalChars _ = [Nothing]
+    outsideBrackets (Just (_, '['):rest)
+        | Just after <- afterBracket rest = outsideBrackets after
+    outsideBrackets (Just c:rest) = c : outsideBrackets rest
+    outsideBrackets (Nothing:rest) = outsideBrackets rest
+    outsideBrackets [] = []
+    afterBracket rest = case break isClosing $ skipLeadingBracket $ skipNegation rest of
+        (_, _:after) -> Just after
+        _ -> Nothing
+    skipNegation (Just (_, c):rest) | c `elem` "!^" = rest
+    skipNegation rest = rest
+    skipLeadingBracket (Just (_, ']'):rest) = rest
+    skipLeadingBracket rest = rest
+    isClosing (Just (_, ']')) = True
+    isClosing _ = False
 checkSingleQuotedCasePatterns _ _ = return ()
 
 

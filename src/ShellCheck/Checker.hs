@@ -504,6 +504,14 @@ prop_irixDecimalLetReferencesVariable =
     2034 `notElem` checkIrix "features=26; let '(features & ~26) == 0'"
 prop_irixHexArithmeticCanBeDisabled =
     3071 `notElem` checkIrix "# shellcheck disable=SC3071\nlet 'number = 0x1a'"
+prop_dynamicBracketCaseStyle = conjoin
+    [ counterexample shell $ 2340 `notElem` checkWithOption
+        "require-single-quoted-case-patterns"
+        ("# shellcheck shell=" ++ shell ++ "\n" ++ source)
+    | shell <- ["sh", "bash", "ksh", "irix-sh", "irix-ksh"]
+    , source <- [ "controls=a-z; case \"${text}\" in *[${controls}]*) :;; *) :;; esac"
+                , "controls=`print '\\001-\\010\\013-\\037\\177'`; case \"${text}\" in *[${controls}]*) :;; *) :;; esac"
+                ]]
 prop_irixRejectsQuotedRemovalDelimiters =
     conjoin [counterexample (name ++ ": " ++ source) $ 3069 `elem` checkProfile source
             | (name, checkProfile) <- [("irix-sh", checkIrix), ("irix-ksh", checkIrixKsh)]

@@ -5,6 +5,11 @@
 - SC3071: diagnose C-style hexadecimal arithmetic constants in both IRIX
   profiles; native shells require `base#digits`, such as `16#1a`.
 
+### Fixed
+- SC2340 no longer recommends quoting active bracket syntax in dynamic
+  `case` patterns such as `*[${controls}]*`; constant prefixes and suffixes
+  remain eligible for the opt-in style check.
+
 
 ## v0.11.0-irix.9 - 2026-09-11
 ### Fixed
