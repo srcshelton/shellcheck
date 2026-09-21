@@ -1,0 +1,46 @@
+#!/usr/bin/env python3
+"""CLI regression contracts; pass a freshly built ShellCheck executable."""
+import json
+import subprocess
+import sys
+
+binary = sys.argv[1]
+checks = 0
+
+def codes(source, *options):
+    global checks
+    run = subprocess.run([binary, "--norc", "--format=json1", *options, "-"],
+                         input=source, text=True, capture_output=True)
+    assert run.returncode in (0, 1), (run.returncode, run.stderr)
+    assert not run.stderr, run.stderr
+    checks += 1
+    return {c["code"] for c in json.loads(run.stdout)["comments"]}
+
+for dialect in ("irix-bsh", "irix-jsh", "bsh", "jsh"):
+    args = ("--shell=" + dialect,)
+    assert not codes('value=`expr 1 + 1`; echo "$value"', *args)
+    assert not codes('case "$1" { value) echo yes;; }', *args)
+    assert 3072 in codes('value=$(echo yes)', *args)
+    assert 3073 in codes('value=$((1+1))', *args)
+    assert 3045 in codes('read -r value', *args)
+    assert 2162 not in codes('read value', *args)
+    assert 3076 in codes('export value=one', *args)
+    assert 2031 in codes('value=outer; echo inner | read value; echo "$value"', *args)
+    assert 2009 not in codes('ps -ef | grep cron', *args)
+    assert 2021 not in codes("tr '[a-z]' '[A-Z]'", *args)
+    assert not codes('op=-f; [ "$op" /bin/bsh ]', *args)
+    for operator in ("-nt", "-ot", "-ef"):
+        assert 3077 in codes('[ /bin/bsh ' + operator + ' /bin/jsh ]', *args)
+    assert 3017 not in codes('[ -k /bin/bsh ]', *args)
+
+for executable in ("/bin/bsh", "/bin/jsh", "/sbin/bsh", "/usr/bin/env irix-jsh"):
+    assert 3045 in codes("#!" + executable + "\nread -r value")
+    assert 3045 in codes("#!" + executable + "\nread -r value", "--sh-variant=irix-ksh")
+    assert 3045 not in codes("#!" + executable + "\nread -r value", "--shell=bash")
+assert 3045 in codes("#!/bin/sh\nread -r value", "--sh-variant=irix-jsh")
+assert 3072 not in codes('x=$(echo yes); echo "$x"', "--shell=sh")
+assert 3068 in codes('x=$(echo yes); echo "$x"', "--shell=irix-sh")
+assert not {3068, 3072, 3073} & codes('x=$(echo yes); echo "$x"', "--shell=irix-ksh")
+for dialect in ("irix-sh", "irix-ksh"):
+    assert not codes('op=-f; [ "$op" /bin/bsh ]', "--shell=" + dialect)
+print(f"PASS {checks} Bourne CLI selection, precedence, compatibility and advice contracts")

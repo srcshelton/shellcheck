@@ -304,7 +304,7 @@ prop_checkBashismsIrixKshReplacement = verify checkBashisms
     "# shellcheck shell=irix-ksh\nx=value\necho \"${x//a/b}\""
 prop_checkBashismsIrixKshSupported = verifyNot checkBashisms
     "# shellcheck shell=irix-ksh\nx=$(echo value)\necho \"$((1 + 1)) ${#x}\"\n(( x = 1 ))\nlet x=x+1\n[[ -n $x ]]\nread -r x"
-checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixKsh] $ \t -> do
+checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixBsh, IrixKsh] $ \t -> do
     params <- ask
     kludge params t
  where
@@ -314,15 +314,28 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixKsh] $ \t -> do
     isBusyboxSh = shellType params == BusyboxSh
     isDash = shellType params == Dash || isBusyboxSh
     isIrixKsh = shellType params == IrixKsh
+    isIrixBsh = shellType params == IrixBsh
     warnMsg id code s =
         if isIrixKsh
         then err id code $ "In IRIX ksh, " ++ s ++ " not supported."
+        else if isIrixBsh
+        then err id code $ "In IRIX bsh/jsh, " ++ s ++ " not supported."
         else if isDash
         then err  id code $ "In dash, " ++ s ++ " not supported."
         else warn id code $ "In POSIX sh, " ++ s ++ " undefined."
     asStr = getLiteralString
 
     bashism t | isIrixKsh = irixKshism t
+    bashism (T_SimpleCommand id _ ((asStr -> Just "command"):_)) | isIrixBsh =
+        warnMsg id 3044 "'command' is"
+    bashism (T_DollarExpansion id _) | isIrixBsh =
+        err id 3072 "IRIX bsh/jsh does not support $(..) command substitution. Use backticks."
+    bashism (T_DollarArithmetic id _) | isIrixBsh =
+        warnMsg id 3073 "$((..)) arithmetic expansion is"
+    bashism (T_DollarSingleQuoted id _) | isIrixBsh =
+        warnMsg id 3003 "$'..' quoting is"
+    bashism (T_Banged id _) | isIrixBsh =
+        warnMsg id 3074 "! pipeline negation is"
     bashism (T_ProcSub id _ _) = warnMsg id 3001 "process substitution is"
     bashism (T_Extglob id _ _) = warnMsg id 3002 "extglob is"
     bashism (T_DollarDoubleQuoted id _) = warnMsg id 3004 "$\"..\" is"
@@ -369,6 +382,11 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixKsh] $ \t -> do
         warnMsg id 3028 $ str ++ " is"
 
     bashism t@(T_DollarBraced id _ token) = do
+        when isIrixBsh $ do
+            when ("#" `isPrefixOf` str && length str > 1) $
+                warnMsg id 3075 "parameter length expansion is"
+            when (any (`isPrefixOf` getBracedModifier str) ["#", "%"]) $
+                warnMsg id 3075 "parameter prefix/suffix removal is"
         unless isBusyboxSh $ mapM_ check simpleExpansions
         mapM_ check advancedExpansions
         when (isBashVariable var) $
@@ -402,7 +420,7 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixKsh] $ \t -> do
             then
                 unless (argString `matches` busyboxFlagRegex) $
                     warnMsg (getId arg) 3036 "echo flags besides -n and -e"
-            else if isDash
+            else if isDash || isIrixBsh
             then
                 when (argString /= "-n") $
                     warnMsg (getId arg) 3036 "echo flags besides -n"
@@ -458,11 +476,13 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixKsh] $ \t -> do
             | otherwise = return ()
         checkFlags [] = return ()
 
-        options              = "abCefhmnuvxo"
+        options              = if isIrixBsh then "aefhkmntuvx" else "abCefhmnuvxo"
         optionsSet           = Set.fromList options
         startsOption         = (`matches` mkRegex "^(\\+|-[^-])")
         oFlagRegex           = mkRegex $ "^[-+][" <> options <> "]*o$"
-        validFlagsRegex      = mkRegex $ "^[-+]([" <> options <> "]+o?|o)$"
+        validFlagsRegex      = mkRegex $ if isIrixBsh
+            then "^[-+][" <> options <> "]+$"
+            else "^[-+]([" <> options <> "]+o?|o)$"
         beginsWithDoubleDash = (`matches` mkRegex "^--.+$")
         longOptions          = Set.fromList
             [ "allexport", "errexit", "ignoreeof", "monitor", "noclobber"
@@ -478,6 +498,10 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixKsh] $ \t -> do
                 warnMsg id 3043 $ "'local' is"
             when (name `elem` unsupportedCommands) $
                 warnMsg id 3044 $ "'" ++ name ++ "' is"
+            when (isIrixBsh && name `elem` ["export", "readonly"]) $
+                forM_ rest $ \arg ->
+                    when (isAssignment arg) $
+                        err (getId arg) 3076 "IRIX bsh/jsh requires assignment and export/readonly to be separate commands."
             sequence_ $ do
                 allowed' <- Map.lookup name allowedFlags
                 allowed <- allowed'
@@ -515,18 +539,22 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixKsh] $ \t -> do
       where
         unsupportedCommands = [
             "let", "caller", "builtin", "complete", "compgen", "declare", "dirs", "disown",
-            "enable", "mapfile", "readarray", "pushd", "popd", "shopt", "suspend",
+            "enable", "mapfile", "readarray", "pushd", "popd", "shopt",
             "typeset"
-            ]
+            ] ++ (if isIrixBsh then ["command", "print"] else ["suspend"])
+        isAssignment T_Assignment {} = True
+        isAssignment arg = maybe False (\s -> case break (== '=') s of
+            (name, '=':_) -> isVariableName name
+            _ -> False) (getLiteralString arg)
         allowedFlags = Map.fromList [
-            ("cd", Just ["L", "P"]),
+            ("cd", Just $ if isIrixBsh then [] else ["L", "P"]),
             ("exec", Just []),
-            ("export", Just ["p"]),
+            ("export", Just $ if isIrixBsh then [] else ["p"]),
             ("hash", Just $ if isDash then ["r", "v"] else ["r"]),
-            ("jobs", Just ["l", "p"]),
+            ("jobs", Just $ if isIrixBsh then ["l", "p", "x"] else ["l", "p"]),
             ("printf", Just []),
-            ("read", Just $ if isDash || isBusyboxSh then ["r", "p"] else ["r"]),
-            ("readonly", Just ["p"]),
+            ("read", Just $ if isIrixBsh then [] else if isDash || isBusyboxSh then ["r", "p"] else ["r"]),
+            ("readonly", Just $ if isIrixBsh then [] else ["p"]),
             ("trap", Just []),
             ("type", Just $ if isBusyboxSh then ["p"] else []),
             ("ulimit",
@@ -598,6 +626,9 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixKsh] $ \t -> do
                 Assignment (_, _, name, _) -> name == var
                 _ -> False
 
+    checkTestOp _ op id | isIrixBsh && op `elem` ["-e", "-S", "-nt", "-ot", "-ef"] =
+        warnMsg id 3077 $ "test " ++ op ++ " is"
+    checkTestOp _ op _ | isIrixBsh && op `elem` ["-k"] = return ()
     checkTestOp table op id = sequence_ $ do
         (code, shells, msg) <- Map.lookup op table
         guard . not $ shellType params `elem` shells

@@ -558,7 +558,7 @@ getAlias arg =
         modify ((takeWhile (/= '=') string, getId arg):)
 
 prop_checkEchoWc3 = verify checkEchoWc "n=$(echo $foo | wc -c)"
-checkEchoWc _ (T_Pipeline id _ [a, b]) =
+checkEchoWc params (T_Pipeline id _ [a, b]) | shellType params /= IrixBsh =
     when (acmd == ["echo", "${VAR}"]) $
         case bcmd of
             ["wc", "-c"] -> countMsg
@@ -606,19 +606,19 @@ checkAssignAteCommand params (T_SimpleCommand id [T_Assignment _ _ _ _ assignmen
 checkAssignAteCommand _ _ = return ()
 
 commandSubstitution params command
-    | shellType params == IrixSh = "`" ++ command ++ "`"
+    | not (supportsDollarCommandSubstitution $ shellType params) = "`" ++ command ++ "`"
     | otherwise = "$(" ++ command ++ ")"
 
 prop_checkArithmeticOpCommand1 = verify checkArithmeticOpCommand "i=i + 1"
 prop_checkArithmeticOpCommand2 = verify checkArithmeticOpCommand "foo=bar * 2"
 prop_checkArithmeticOpCommand3 = verifyNot checkArithmeticOpCommand "foo + opts"
-checkArithmeticOpCommand _ (T_SimpleCommand id [T_Assignment {}] (firstWord:_)) =
+checkArithmeticOpCommand params (T_SimpleCommand id [T_Assignment {}] (firstWord:_)) =
     mapM_ check $ getGlobOrLiteralString firstWord
   where
     check op =
         when (op `elem` ["+", "-", "*", "/"]) $
             warn (getId firstWord) 2099 $
-                "Use $((..)) for arithmetics, e.g. i=$((i " ++ op ++ " 2))"
+                arithmeticAssignmentAdvice params op
 checkArithmeticOpCommand _ _ = return ()
 
 prop_checkWrongArit = verify checkWrongArithmeticAssignment "i=i+1"
@@ -629,7 +629,7 @@ checkWrongArithmeticAssignment params (T_SimpleCommand id [T_Assignment _ _ _ _ 
     var:op:_ <- matchRegex regex str
     guard $ S.member var references
     return . warn (getId val) 2100 $
-        "Use $((..)) for arithmetics, e.g. i=$((i " ++ op ++ " 2))"
+        arithmeticAssignmentAdvice params op
   where
     regex = mkRegex "^([_a-zA-Z][_a-zA-Z0-9]*)([+*-]).+$"
     references = S.fromList [name | Assignment (_, _, name, _) <- variableFlow params]
@@ -643,6 +643,11 @@ checkWrongArithmeticAssignment params (T_SimpleCommand id [T_Assignment _ _ _ _ 
     getLiterals (T_Glob _ s) = return s
     getLiterals _ = Nothing
 checkWrongArithmeticAssignment _ _ = return ()
+
+arithmeticAssignmentAdvice params op = case shellType params of
+    IrixBsh -> "Use expr for arithmetic and backticks to capture its result."
+    IrixSh -> "Use let or ((..)) to assign an arithmetic result."
+    _ -> "Use $((..)) for arithmetics, e.g. i=$((i " ++ op ++ " 2))"
 
 
 prop_checkUuoc1 = verify checkUuoc "cat foo | grep bar"
@@ -1365,6 +1370,7 @@ checkNumberComparisons params (TC_Binary id typ op lhs rhs) = do
         when (typ == SingleBracket && op `elem` ["<", ">"]) $
             case shellType params of
                 Sh -> return ()  -- These are unsupported and will be caught by bashism checks.
+                IrixBsh -> return ()
                 Dash -> err id 2073 $ "Escape \\" ++ op ++ " to prevent it redirecting."
                 BusyboxSh -> err id 2073 $ "Escape \\" ++ op ++ " to prevent it redirecting."
                 _ -> err id 2073 $ "Escape \\" ++ op ++ " to prevent it redirecting (or switch to [[ .. ]])."
@@ -1887,7 +1893,7 @@ checkUuoeVar params p =
     case p of
         T_Backticked id [cmd] -> check id cmd
         T_DollarExpansion id [cmd]
-            | shellType params /= IrixSh -> check id cmd
+            | supportsDollarCommandSubstitution (shellType params) -> check id cmd
         _ -> return ()
   where
     couldBeOptimized f = case f of
@@ -1906,7 +1912,7 @@ checkUuoeVar params p =
           (first:rest) ->
             unless (isCovered first rest || "-" `isPrefixOf` onlyLiteralString first) $
                 when (all couldBeOptimized vars) $ style id 2116 $
-                    if shellType params == IrixSh
+                    if not (supportsDollarCommandSubstitution $ shellType params)
                     then "Useless echo in command substitution? Use the command directly."
                     else "Useless echo? Instead of 'cmd $(echo foo)', just use 'cmd foo'."
           _ -> return ()
@@ -1961,7 +1967,7 @@ prop_checkBackticks2 = verifyNot checkBackticks "echo $(foo)"
 prop_checkBackticks3 = verifyNot checkBackticks "echo `#inlined comment` foo"
 prop_checkBackticksIrix = verifyNot checkBackticks "# shellcheck shell=irix-sh\necho `foo`"
 checkBackticks params (T_Backticked id list)
-    | shellType params /= IrixSh
+    | supportsDollarCommandSubstitution (shellType params)
     , not (null list) =
     addComment $
         makeCommentWithFix StyleC id 2006  "Use $(...) notation instead of legacy backticks `...`."
@@ -2177,7 +2183,7 @@ prop_checkSpuriousExpansion4 = verify checkSpuriousExpansion "$((i++))"
 checkSpuriousExpansion params (T_SimpleCommand _ _ [T_NormalWord _ [word]]) = check word
   where
     check word = case word of
-        T_DollarExpansion id _ | shellType params /= IrixSh ->
+        T_DollarExpansion id _ | supportsDollarCommandSubstitution (shellType params) ->
             warn id 2091 "Remove surrounding $() to avoid executing output (or use eval if intentional)."
         T_Backticked id _ ->
             warn id 2092 "Remove backticks to avoid executing output (or use eval if intentional)."
@@ -3594,6 +3600,7 @@ checkFunctionDeclarations params
         IrixSh ->
             when (hasKeyword && hasParens) $
                 err id 2111 "IRIX sh does not allow 'function' keyword and '()' at the same time."
+        IrixBsh -> forSh
         Dash -> forSh
         BusyboxSh -> forSh
         Sh   -> forSh
@@ -3982,6 +3989,7 @@ prop_checkReadWithoutR4 = verifyNot checkReadWithoutR "read -t 0 && read --d '' 
 prop_checkReadWithoutR5 = verifyNot checkReadWithoutR "read -t 0 foo < file.txt"
 prop_checkReadWithoutR6 = verifyNot checkReadWithoutR "read -u 3 -t 0"
 checkReadWithoutR params t@T_SimpleCommand {} | t `isUnqualifiedCommand` "read"
+    && shellType params /= IrixBsh
     && "r" `notElem` map snd flags && not has_t0 =
         info (getId $ getCommandTokenOrThis t) 2162 "read without -r will mangle backslashes."
   where

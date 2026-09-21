@@ -98,10 +98,15 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
 **-s**\ *shell*,\ **--shell=***shell*
 
 :   Specify Bourne shell dialect. Valid values are *sh*, *bash*, *dash*, *ksh*,
-    *busybox*, *irix-sh*, and *irix-ksh*.
+    *busybox*, *irix-bsh*, *irix-jsh*, *irix-sh*, and *irix-ksh*.
     The default is to deduce the shell from the file's `shell` directive,
     shebang, or `.bash/.bats/.dash/.ksh` extension, in that order. *sh* refers to
     POSIX `sh` (not the system's), and will warn of portability issues.
+    *irix-bsh* and *irix-jsh* share the older IRIX Bourne-shell language profile
+    for `/bin/bsh` and `/bin/jsh`; jsh enables job control but does not change
+    the script grammar. `.bsh` and `.jsh` extensions also select this profile.
+    Job-control commands still require an appropriate terminal/session; this
+    profile does not guarantee interactive job-control availability.
     *irix-sh* models IRIX `/sbin/sh`; *irix-ksh* models the same IRIX shell
     executable when invoked in Korn-shell mode.
 
@@ -138,7 +143,8 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
 
 :   Treat a generic `sh` shebang as the specified dialect. This affects scripts
     using interpreters such as `/bin/sh`, while explicit `bash`, `dash`, `ksh`,
-    `busybox`, `irix-sh`, and `irix-ksh` shebangs retain their own dialect. An
+    `busybox`, `bsh`, `jsh`, `irix-bsh`, `irix-jsh`, `irix-sh`, and `irix-ksh`
+    shebangs retain their own dialect. An
     explicit `shell` override takes precedence.
 
 **-S**\ *SEVERITY*,\ **--severity=***severity*

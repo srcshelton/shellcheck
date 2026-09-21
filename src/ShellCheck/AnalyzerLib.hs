@@ -216,6 +216,7 @@ makeParameters spec = params
                 Dash -> False
                 BusyboxSh -> False
                 Sh   -> False
+                IrixBsh -> False
                 Ksh  -> True
                 IrixSh -> True
                 IrixKsh -> True,
@@ -225,6 +226,7 @@ makeParameters spec = params
                 Dash -> True
                 BusyboxSh -> True
                 Sh   -> True
+                IrixBsh -> True
                 Ksh  -> False
                 IrixSh -> True
                 IrixKsh -> True,
@@ -234,6 +236,7 @@ makeParameters spec = params
                 Dash -> isOptionSet "pipefail" root
                 BusyboxSh -> isOptionSet "pipefail" root
                 Sh -> isOptionSet "pipefail" root
+                IrixBsh -> False
                 Ksh  -> isOptionSet "pipefail" root
                 IrixSh -> isOptionSet "pipefail" root
                 IrixKsh -> isOptionSet "pipefail" root,
@@ -735,7 +738,7 @@ getModifiedVariableCommand params base@(T_SimpleCommand id cmdPrefix (T_NormalWo
             then []
             else concatMap getModifierParamString rest
         "set" ->
-            if isIrixPlatformShell (shellType params)
+            if isIrixKshDialect (shellType params)
             then case getIrixArray rest of
                     Just array -> [array]
                     Nothing -> positionalParameters

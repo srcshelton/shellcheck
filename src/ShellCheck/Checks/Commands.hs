@@ -312,7 +312,7 @@ checkExpr = CommandCheck (Basename "expr") f where
         params <- ask
         -- IRIX sh lacks arithmetic expansion and modern command substitution,
         -- so expr remains necessary when a computed value must be substituted.
-        when (shellType params /= IrixSh && all (`notElem` exceptions) (words $ arguments t)) $
+        when (shellType params `notElem` [IrixSh, IrixBsh] && all (`notElem` exceptions) (words $ arguments t)) $
             style (getId $ getCommandTokenOrThis t) 2003
                 "expr is antiquated. Consider rewriting this using $((..)), ${} or [[ ]]."
 
@@ -355,7 +355,13 @@ checkExpr = CommandCheck (Basename "expr") f where
 
     checkOp side = do
         params <- ask
-        case getLiteralString side of
+        case (shellType params, getLiteralString side) of
+            (IrixBsh, Just "length") -> msg "'expr length' has unspecified results. Prefer expr str : '.*'."
+            (IrixBsh, Just "substr") -> msg "'expr substr' has unspecified results. Prefer cut."
+            (IrixBsh, Just "index") -> msg "'expr index' has unspecified results. Use a portable string search."
+            (_, operation) -> checkOperation params operation
+      where
+        checkOperation params operation = case operation of
             Just "match" -> msg "'expr match' has unspecified results. Prefer 'expr str : regex'."
             Just "length" -> msg "'expr length' has unspecified results. Prefer ${#var}."
             Just "substr" -> msg "'expr substr' has unspecified results. Prefer 'cut' or ${var#???}."
@@ -364,7 +370,6 @@ checkExpr = CommandCheck (Basename "expr") f where
                 then "'expr index' has unspecified results. Prefer x=${var%%[chars]*}; expr ${#x} + 1."
                 else "'expr index' has unspecified results. Prefer x=${var%%[chars]*}; $((${#x}+1))."
             _ -> return ()
-      where
         msg = info (getId side) 2308
 
 
@@ -839,7 +844,7 @@ prop_checkUuoeCmdIrixMessage = verifyMessage checkUuoeCmd 2005
 checkUuoeCmd = CommandCheck (Exactly "echo") (f . arguments) where
     f [token] = when (tokenIsJustCommandOutput token) $ do
         params <- ask
-        let substitution = if shellType params == IrixSh then "`cmd`" else "$(cmd)"
+        let substitution = if supportsDollarCommandSubstitution (shellType params) then "$(cmd)" else "`cmd`"
         style (getId token) 2005 $
             "Useless echo? Instead of 'echo " ++ substitution ++ "', just use 'cmd'."
     f _ = return ()

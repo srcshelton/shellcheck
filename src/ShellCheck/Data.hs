@@ -184,6 +184,10 @@ shellForExecutable name =
         "ksh88" -> return Ksh
         "ksh93" -> return Ksh
         "oksh"  -> return Ksh
+        "bsh" -> return IrixBsh
+        "jsh" -> return IrixBsh
+        "irix-bsh" -> return IrixBsh
+        "irix-jsh" -> return IrixBsh
         "irix-sh" -> return IrixSh
         "irix-ksh" -> return IrixKsh
         _ -> Nothing
@@ -196,12 +200,23 @@ shellName shell =
         Dash -> "dash"
         Ksh -> "ksh"
         BusyboxSh -> "busybox"
+        IrixBsh -> "irix-bsh"
         IrixSh -> "irix-sh"
         IrixKsh -> "irix-ksh"
 
+isIrixPlatformShell IrixBsh = True
 isIrixPlatformShell IrixSh = True
 isIrixPlatformShell IrixKsh = True
 isIrixPlatformShell _ = False
+
+-- bsh/jsh share the Bourne language, not the /sbin/sh Korn parser.
+isIrixKshDialect IrixSh = True
+isIrixKshDialect IrixKsh = True
+isIrixKshDialect _ = False
+
+supportsDollarCommandSubstitution IrixBsh = False
+supportsDollarCommandSubstitution IrixSh = False
+supportsDollarCommandSubstitution _ = True
 
 isKshShell Ksh = True
 isKshShell IrixKsh = True
@@ -210,6 +225,7 @@ isKshShell _ = False
 flagsForRead = "sreu:n:N:i:p:a:t:"
 
 -- IRIX sh uses -p to read from the coprocess, without an option argument.
+flagsForReadFor IrixBsh = ""
 flagsForReadFor IrixSh = "sreu:n:N:i:pa:t:"
 flagsForReadFor IrixKsh = "sreu:n:N:i:pa:t:"
 flagsForReadFor _ = flagsForRead

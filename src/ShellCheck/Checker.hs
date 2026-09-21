@@ -54,6 +54,8 @@ tokenToPosition startMap t = fromMaybe fail $ do
 shellFromFilename filename = listToMaybe candidates
   where
     shellExtensions = [(".ksh", Ksh)
+                      ,(".bsh", IrixBsh)
+                      ,(".jsh", IrixBsh)
                       ,(".bash", Bash)
                       ,(".bats", Bash)
                       ,(".dash", Dash)
@@ -640,6 +642,65 @@ prop_irixKshAcceptsIrixCoprocess =
     2118 `notElem` checkIrixKsh "print value |&\nread -p result"
 prop_irixKshRejectsStderrPipeInterpretation =
     2118 `elem` checkIrixKsh "print value |& sed 's/value/result/'"
+
+-- bsh and jsh use one language/analysis profile. Job-control defaults depend
+-- on invocation/terminal state, not a different grammar.
+checkIrixBsh src = getErrors (mockedSystemInterface []) emptyCheckSpec {
+    csScript = src, csExcludedWarnings = [2148], csShellTypeOverride = Just IrixBsh
+    }
+
+prop_irixBourneSelection = conjoin
+    [ counterexample name $ 3045 `elem` check ("# shellcheck shell=" ++ name ++ "\nread -r value")
+    | name <- ["irix-bsh", "irix-jsh", "bsh", "jsh"] ]
+prop_irixBourneShebangs = conjoin
+    [ counterexample name $ 3045 `elem` check ("#!" ++ name ++ "\nread -r value")
+    | name <- ["/bin/bsh", "/bin/jsh", "/sbin/bsh", "/usr/bin/env irix-jsh"] ]
+prop_irixBourneUnsupported = conjoin
+    [ counterexample source $ code `elem` checkIrixBsh source
+    | (code, source) <-
+        [ (3072, "x=$(echo value)")
+        , (3073, "x=$((1 + 1))")
+        , (3075, "x=abc; echo \"${#x}\"")
+        , (3075, "x=abc; echo \"${x#a}\"")
+        , (3075, "x=abc; echo \"${x%%c}\"")
+        , (3074, "! false")
+        , (3076, "export value=abc")
+        , (3076, "readonly value=abc")
+        , (3077, "[ -e /bin/bsh ]")
+        , (3077, "[ a -nt b ]")
+        , (3077, "test -S /bin/bsh")
+        , (3044, "command echo value")
+        , (3044, "print value")
+        , (3045, "cd -L /")
+        , (3045, "export -p")
+        , (3045, "read -r value")
+        , (3041, "set -o pipefail")
+        , (3006, "((value=1))")
+        , (3010, "[[ a = a ]]")
+        , (3003, "echo $'hello'")
+        , (3009, "echo {a,b}")
+        ] ]
+prop_irixBourneSupported = conjoin
+    [ counterexample (source ++ " -> " ++ show (checkIrixBsh source)) $ null $ intersect [1072,1073,2000,2003,2006,2162,3003,3036,3037,3041,3044,3045,3075,3076] $ checkIrixBsh source
+    | source <-
+        [ "case value { value) echo yes;; }"
+        , "f() { echo yes; }; f"
+        , "value=`expr 1 + 1`; echo \"$value\""
+        , "echo value | { read value; echo \"$value\"; }"
+        , "value=abc; export value; readonly value"
+        , "echo \"${value:-default} ${value:=assigned} ${value:+present}\""
+        , "set -- a b; echo \"${#}\""
+        , "echo -n value"
+        , "set -m"
+        , "value=abc; echo \"$value\" | wc -c"
+        , "op=-f; [ \"$op\" /bin/bsh ]"
+        ] ]
+prop_irixBournePipelineScope =
+    2031 `elem` checkIrixBsh "value=outer; echo inner | read value; echo \"$value\""
+prop_irixBourneNoCoprocess =
+    not (null (intersect [1072,1073,3029] $ checkIrixBsh "echo value |&"))
+prop_irixBourneExtensions =
+    shellFromFilename "script.bsh" == Just IrixBsh && shellFromFilename "script.jsh" == Just IrixBsh
 
 checkShVariant variant src =
     getErrors

@@ -331,6 +331,8 @@ getAnnotatedShell = do
 
 isIrixShell = (== Just IrixSh) <$> getAnnotatedShell
 
+needsBacktickAdvice = maybe False (not . supportsDollarCommandSubstitution) <$> getAnnotatedShell
+
 isIrixDialect = maybe False isIrixPlatformShell <$> getAnnotatedShell
 
 
@@ -508,7 +510,7 @@ readConditionContents single =
                                 s <- readVariableName
                                 spacing1
                                 when (s `elem` commonCommands) $ do
-                                    irix <- isIrixShell
+                                    irix <- needsBacktickAdvice
                                     parseProblemAt pos WarningC 1014 $
                                         if irix
                                         then "Use 'if cmd; then ..' to check exit code, or compare the output from legacy backticks."
@@ -759,7 +761,9 @@ readConditionContents single =
         return $ TC_DynamicUnary id typ op arg
       where
         isDynamicOperator (T_NormalWord _ [part]) =
-            isJust $ getUnmodifiedParameterExpansion part
+            case part of
+                T_DoubleQuoted _ [inner] -> isJust $ getUnmodifiedParameterExpansion inner
+                _ -> isJust $ getUnmodifiedParameterExpansion part
         isDynamicOperator _ = False
 
     readCondExpr =
@@ -1402,7 +1406,7 @@ readBackTicked quoted = called "backtick expansion" $ do
       void (char '`') <|> do
          pos <- getPosition
          char '´'
-         irix <- isIrixShell
+         irix <- needsBacktickAdvice
          parseProblemAt pos ErrorC 1077 $
             if irix
             then "For command expansion, the tick should slant left (` vs ´)."
@@ -2492,7 +2496,7 @@ readTerm = do
 readPipeSequence = try readIrixCoprocess <|> readRegularPipeSequence
 
 readIrixCoprocess = do
-    irix <- isIrixDialect
+    irix <- maybe False isIrixKshDialect <$> getAnnotatedShell
     guard irix
     start <- startSpan
     (cmds, pipes) <- sepBy1WithSeparators (readBanged readCommand) readOrdinaryPipe
@@ -3562,8 +3566,8 @@ readScriptFile sourced = do
     verifyShebang pos s = do
         case isValidShell s of
             Just True -> return ()
-            Just False -> parseProblemAt pos ErrorC 1071 "ShellCheck only supports sh/bash/dash/ksh/'busybox sh'/irix-sh/irix-ksh scripts. Sorry!"
-            Nothing -> parseProblemAt pos ErrorC 1008 "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'/irix-sh/irix-ksh. Add a 'shell' directive to specify."
+            Just False -> parseProblemAt pos ErrorC 1071 "ShellCheck only supports sh/bash/dash/ksh/'busybox sh'/irix-bsh/irix-jsh/irix-sh/irix-ksh scripts. Sorry!"
+            Nothing -> parseProblemAt pos ErrorC 1008 "This shebang was unrecognized. ShellCheck only supports sh/bash/dash/ksh/'busybox sh'/irix-bsh/irix-jsh/irix-sh/irix-ksh. Add a 'shell' directive to specify."
 
     isValidShell s =
         let good = null s || any (`isPrefixOf` s) goodShells
@@ -3584,6 +3588,10 @@ readScriptFile sourced = do
         "bats",
         "ksh",
         "oksh",
+        "bsh",
+        "jsh",
+        "irix-bsh",
+        "irix-jsh",
         "irix-sh",
         "irix-ksh"
         ]

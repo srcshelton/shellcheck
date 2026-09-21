@@ -1,5 +1,8 @@
 ## Unreleased
 ### Added
+- Native-validated `irix-bsh` and `irix-jsh` aliases for IRIX's older Bourne
+  shell, including its non-POSIX substitutions, read/export/test restrictions,
+  pipeline scope and brace-form case syntax. Avoid incompatible POSIX advice.
 - SC3070: diagnose unsupported `$((expression))` arithmetic expansion in
   `irix-sh`, while preserving IRIX ksh support and native arithmetic commands.
 - SC3071: diagnose C-style hexadecimal arithmetic constants in both IRIX
