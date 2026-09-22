@@ -1,5 +1,9 @@
 ## Unreleased
 ### Added
+- Opt-in `check-exit-trap-scope` (SC2354): bounded warnings for EXIT actions
+  outliving ordinary function-local values after return, and proven nested
+  explicit-exit calls on IRIX. Implicit errexit is deliberately not equated
+  with explicit exit; the existing default SC2349 remains unchanged.
 - Opt-in `check-filename-streams` (SC2353): track filename record delimiters
   through supported pipelines, saved files, substitutions, read loops and
   bounded static function calls, including loss of NUL separation after

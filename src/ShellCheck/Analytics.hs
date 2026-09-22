@@ -239,6 +239,13 @@ prop_verifyOptionalExamples = all check optionalTreeChecks
 optionalTreeChecks :: [(CheckDescription, (Parameters -> Token -> [TokenComment]))]
 optionalTreeChecks = [
     (newCheckDescription {
+        cdName = "check-exit-trap-scope",
+        cdOptionalCodes = [2354],
+        cdDescription = "Check deferred EXIT actions against function-local lifetimes",
+        cdPositive = "#!/bin/bash\nf() { local value=inner; trap 'echo \"$value\"' EXIT; }; f",
+        cdNegative = "#!/bin/bash\nvalue=outer; trap 'echo \"$value\"' EXIT"
+    }, checkDeferredExitTrapScope),
+    (newCheckDescription {
         cdName = "check-filename-streams",
         cdOptionalCodes = [2353],
         cdDescription = "Track filename delimiters through supported pipeline stages",
@@ -5544,13 +5551,21 @@ prop_checkIrixExitTrapScopeOtherShells = conjoin
         "# shellcheck shell=" ++ shell ++ "\nf() { typeset value=inner; trap 'echo \"$value\"' 0; exit 1; }; f"
     | shell <- ["sh", "bash", "dash", "busybox", "ksh", "irix-bsh", "irix-jsh"] ]
 
-checkIrixExitTrapScope params root
-    | shellType params `notElem` [IrixSh, IrixKsh] = []
+checkIrixExitTrapScope = checkExitTrapScope False
+checkDeferredExitTrapScope = checkExitTrapScope True
+checkExitTrapScope deferred params root
+    | not deferred && not (elem (shellType params) [IrixSh, IrixKsh]) = []
+    | deferred && not (elem (shellType params) [Bash, Dash, IrixSh, IrixKsh]) = []
     | otherwise = fromMaybe [] $ do
         cfga <- cfgAnalysis params
         guard $ not $ any (`Map.member` functions) ["exit", "trap", "typeset", "local", "declare"]
+        guard $ not deferred || not (any (`Map.member` functions) [":", "true", "return", "set", "unset", "exec"])
         guard $ not $ any (\c -> getCommandName c `elem` map Just ["eval", ".", "source"]) commands
-        return $ execWriter $ mapM_ (checkExit cfga) commands
+        return $ execWriter $ if deferred
+            then do
+                mapM_ (checkReturn cfga) [f | [f] <- Map.elems functions]
+                mapM_ (checkNestedExit cfga) commands
+            else mapM_ (checkExit cfga) commands
   where
     tokens = Map.elems $ idMap params
     commands = [t | t@T_SimpleCommand{} <- tokens]
@@ -5626,12 +5641,19 @@ checkIrixExitTrapScope params root
         guard $ CF.stateIsReachable state
         function <- owner point
         (_, action) <- actionAtExit cfga function point
+        locals <- referencedLocals cfga function point action
+        return $ warn (getId point) 2349 $
+            "On IRIX, EXIT traps run after this function's locals are gone: "
+            ++ intercalate ", " locals ++ ". The trap may read outer or unset values. "
+            ++ "Clean up before exiting or use deliberately persistent state."
+
+    referencedLocals cfga function point action = do
         references <- actionReferences cfga function point action
         let locals = nub
                 [ name
                 | declaration <- commands, sameOwner declaration point
                 , not (inSubshell declaration)
-                , directName declaration `elem` map Just ["typeset", "local", "declare"]
+                , elem (directName declaration) (map Just localBuiltins)
                 , not $ any (`elem` map snd (getAllFlags declaration)) ["g", "n"]
                 , flowDominates cfga (getId declaration) (getId point)
                 , (_,_,name,_) <- getModifiedVariables params declaration
@@ -5643,10 +5665,94 @@ checkIrixExitTrapScope params root
                 && name `elem` mapMaybe getLiteralString (arguments command)
                 && flowMayPrecede cfga (getId command) (getId point)
         guard $ not $ null locals
-        return $ warn (getId point) 2349 $
-            "On IRIX, EXIT traps run after this function's locals are gone: "
-            ++ intercalate ", " locals ++ ". The trap may read outer or unset values. "
-            ++ "Clean up before exiting or use deliberately persistent state."
+        return locals
+    localBuiltins
+        | not deferred = ["typeset", "local", "declare"]
+        | shellType params == Bash = ["typeset", "local", "declare"]
+        | shellType params == Dash = ["local"]
+        | otherwise = ["typeset"]
+
+    -- Keep this separate from the default explicit-exit warning: native
+    -- errexit and explicit exit do not have the same unwind behaviour.
+    linear (T_Annotation _ _ body) = linear body
+    linear (T_Redirecting _ [] body) = linear body
+    linear (T_Pipeline _ [] [body]) = linear body
+    linear (T_BraceGroup _ body) = concat <$> mapM linear body
+    linear command@T_SimpleCommand{} = Just [command]
+    linear _ = Nothing
+    reachable cfga point = maybe False CF.stateIsReachable $
+        CF.getIncomingState cfga (getId point)
+    available cfga function point helper =
+        flowDominates cfga (getId helper) (getId point)
+        || (isNothing (owner helper) && not (null $ callSites function)
+            && all (\call -> isNothing (owner call)
+                && flowDominates cfga (getId helper) (getId call)) (callSites function))
+
+    checkReturn cfga function@(T_Function _ (FunctionKeyword keyword) _ name body) = sequence_ $ do
+        guard $ not keyword && not (hasSetE params)
+        points <- linear body
+        point <- listToMaybe $ reverse points
+        guard $ reachable cfga point
+        let calls = callSites function
+        guard $ not (null calls) && all (\call -> isNothing (owner call)
+            && directName call == Just name
+            && flowDominates cfga (getId function) (getId call)
+            && not (inSubshell call) && reachable cfga call) calls
+        guard $ all (\command -> not (elem (directName command)
+            (map Just ["exit","exec","set","eval",".","source","unset"]))
+            && maybe (assignmentOnly command) (\n -> Map.notMember n functions) (directName command)) points
+        guard $ all ((/= Just "return") . directName) (init points)
+        (installed, action) <- case exitTrap point of
+            (True, Just action) -> Just (point, action)
+            (True, Nothing) -> Nothing
+            _ -> activeTrap cfga point
+        guard $ not $ any (\command -> isNothing (owner command)
+            && (mutatesTrap command || elem (directName command) (map Just ["exec", "command", "builtin", "run"]))
+            && all ((/= getId command) . getId) calls
+            && any (\call -> flowMayPrecede cfga (getId call) (getId command)) calls) commands
+        locals <- referencedLocals cfga function point action
+        return $ warn (getId installed) 2354 $
+            "This EXIT action outlives the function-local values after return: "
+            ++ intercalate ", " locals ++ ". It may read outer or unset values at script exit. "
+            ++ "Clean up before returning or use deliberately persistent state."
+    checkReturn _ _ = return ()
+
+    checkNestedExit cfga point = sequence_ $ do
+        guard $ elem (shellType params) [IrixSh, IrixKsh]
+        guard $ not (inSubshell point) && reachable cfga point
+        function <- owner point
+        name <- directName point
+        helper <- case Map.lookup name functions of Just [f] -> Just f; _ -> Nothing
+        guard $ available cfga function point helper
+        guard $ definitelyExits cfga function point [] helper
+        (_, action) <- actionAtExit cfga function point
+        locals <- referencedLocals cfga function point action
+        return $ warn (getId point) 2354 $
+            "This call reaches an explicit exit on IRIX, before the EXIT action reads "
+            ++ intercalate ", " locals ++ ". Those function-local values will be gone."
+
+    definitelyExits cfga outer point visited helper@(T_Function id _ _ _ body)
+        | elem id visited || length visited >= 8 = False
+        | otherwise = fromMaybe False $ do
+            points <- linear body
+            last <- listToMaybe $ reverse points
+            guard $ available cfga outer point helper
+            guard $ all literalCommand points
+            guard $ all (\command -> elem (directName command) (map Just [":","true"])) (init points)
+            case directName last of
+                Just "exit" -> return $ case mapMaybe getLiteralString (arguments last) of
+                    [] -> True
+                    [status] -> not (null status) && all isDigit status
+                    _ -> False
+                Just name -> case Map.lookup name functions of
+                    Just [callee] -> return $ definitelyExits cfga outer point (id:visited) callee
+                    _ -> Nothing
+                _ -> Nothing
+    definitelyExits _ _ _ _ _ = False
+    literalCommand (T_SimpleCommand _ [] words) = all (isJust . getLiteralString) words
+    literalCommand _ = False
+    assignmentOnly (T_SimpleCommand _ _ []) = True
+    assignmentOnly _ = False
 
     -- Analyze the static action together with just its available, uniquely
     -- defined helpers in a fresh environment. This reuses the existing DFA

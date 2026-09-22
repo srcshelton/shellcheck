@@ -40,6 +40,8 @@ Extra-Source-Files:
     test/backlog-diagnostics.py
     test/filename-streams.py
     test/filename-flow.py
+    test/exit-scope.py
+    test/exit-scope-runtime
     test/filename-streams-runtime.py
 
 source-repository head

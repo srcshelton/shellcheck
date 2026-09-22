@@ -51,6 +51,13 @@ reads not reachable from the action are excluded. Disabling extended analysis
 also disables this proof. Natural script termination, implicit errexit and
 arbitrary call chains remain outside its deliberately bounded coverage.
 
+The separate opt-in SC2354 now covers bounded ordinary-function return and
+proven nested explicit-exit calls; see `doc/backlog-diagnostics.md`. Native
+IRIX sh/ksh tests show that implicit errexit retains the local value in the
+tested cases even though explicit exit loses it. SC2349 has therefore NOT
+been generalized to implicit failures, and neither new case changes profile
+defaults or shared flow analysis.
+
 The message describes a scope risk, not a guarantee that cleanup is wrong.
 If reading the outer value is intentional, use an ordinary documented
 `# shellcheck disable=SC2349` on the exit. Prefer explicit cleanup before exit

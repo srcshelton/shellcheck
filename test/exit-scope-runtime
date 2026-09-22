@@ -1,0 +1,59 @@
+#!/bin/bash
+# Evidence matrix, not a portability claim. Caller owns the durable parent.
+set -eu
+parent=$1
+test -d "$parent"
+case "$(uname -s)" in
+    IRIX*)
+        test "$(id -u)" -ne 0 || { echo 'Run as an unprivileged user' >&2; exit 2; }
+        free=$(df -k "$parent" | tail -1 | awk '{print $(NF-2)}')
+        test "$free" -ge 530432
+        shells='/sbin/sh /bin/ksh'
+        declaration=typeset
+        ;;
+    *)
+        shells=${EXIT_TEST_SHELLS:-/bin/bash}
+        declaration=local
+        ;;
+esac
+fixture="$parent/exit-lifetime-$$"
+mkdir "$fixture"
+for shell in $shells; do
+    for scenario in natural return errexit conditional deep replaced assigned; do
+        prefix=
+        suffix='f'
+        ending=':'
+        case "$scenario" in
+            natural) ;;
+            return) ending='return 0' ;;
+            errexit) prefix='set -e;'; ending='false' ;;
+            conditional) prefix='set -e;'; ending='false'; suffix='if f; then :; fi' ;;
+            deep) ending='g'; prefix='g() { h; }; h() { exit 1; };' ;;
+            replaced) ending="trap 'echo replacement' 0" ;;
+            assigned) ending=':' ;;
+        esac
+        # These strings are source for the child shell, not expansions here.
+        # shellcheck disable=SC2016
+        action='echo "${value-UNSET}"'
+        # shellcheck disable=SC2016
+        if test "$scenario" = assigned; then action='value=fresh; echo "$value"'; fi
+        source="$prefix value=outer; f() { $declaration value=inner; trap '$action' 0; $ending; }; $suffix"
+        stem="$fixture/$(basename "$shell").$scenario"
+        printf '%s\n' "$source" > "$stem.sh"
+        for mode in command file stdin; do
+            status=0
+            case "$mode" in
+                command) "$shell" -c "$source" > "$stem.$mode.out" 2> "$stem.$mode.err" || status=$? ;;
+                file) "$shell" "$stem.sh" > "$stem.$mode.out" 2> "$stem.$mode.err" || status=$? ;;
+                stdin) "$shell" < "$stem.sh" > "$stem.$mode.out" 2> "$stem.$mode.err" || status=$? ;;
+            esac
+            printf '%s\n' "$status" > "$stem.$mode.status"
+            printf '%s %s %s status=%s output=' "$shell" "$scenario" "$mode" "$status"
+            tr '\n' ',' < "$stem.$mode.out"
+            printf ' stderr='
+            tr '\n' ',' < "$stem.$mode.err"
+            printf '\n'
+        done
+    done
+done
+printf 'RETAINED %s\n' "$fixture"

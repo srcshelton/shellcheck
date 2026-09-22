@@ -239,6 +239,8 @@ prop_forkOptionalsUseExpectedSeverity = all hasExpectedSeverity cases
         , ("require-variable-declarations", 2351, StyleC, "value=1; echo \"$value\"")
         , ("check-function-tracing-status", 2352, InfoC,
             "f() { false; set +x; }; if f; then :; fi")
+        , ("check-exit-trap-scope", 2354, WarningC,
+            "#!/bin/bash\nf() { local value=inner; trap 'echo \"$value\"' EXIT; }; f")
         , ("check-exit-in-subshell", 2345, WarningC,
             "input | while read -r line; do exit 1; done")
         , ("check-irix-wait-status", 2348, WarningC,

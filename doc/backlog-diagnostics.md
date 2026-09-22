@@ -1,7 +1,7 @@
 # Diagnostic additions
 
 These changes do not require changes to `# shellcheck` directive syntax.
-The two policy checks below are opt-in, including for IRIX profiles. Existing
+The named policy/analysis checks below are opt-in, including for IRIX profiles. Existing
 checks, severity filtering and disable directives continue to apply normally.
 
 ## SC2118 and SC2155 corrections
@@ -128,3 +128,61 @@ and recursive programs are not solved by this bounded static analysis.
 Selecting an IRIX shell does not imply GNU NUL utility support. Advice is
 capability-neutral, with no automatic rewrite. Existing defaults and shared
 analyses used by other diagnostics are unchanged.
+
+## SC2354: check-exit-trap-scope
+
+Enable with `--enable=check-exit-trap-scope` or
+`# shellcheck enable=check-exit-trap-scope`. This warning supplements, rather
+than broadens, the default IRIX-only SC2349 explicit-exit diagnostic.
+
+For Bash, dash and IRIX sh/ksh, an ordinary `f() { ...; }` function that
+installs `trap 'echo "$value"' 0` and returns with a definite local `value`
+leaves an action that can later read an outer/unset value. SC2354 points at
+the trap installation. Explicit `return` and falling off the end are covered.
+The proof requires a linear body, reachable direct top-level calls, a literal
+action (or available static cleanup helpers), and no known subsequent trap
+mutation. It declines scripts with errexit enabled, keyword-form functions,
+calls in subshells, ambiguous definitions, source/eval and uncertain flow.
+Assignments in the action/helper that supply the value avoid the warning.
+
+For IRIX sh/ksh only, the check also follows up to eight uniquely defined,
+available, nonrecursive helper calls that provably reach an explicit `exit`.
+These helper bodies must be linear literal commands: optional unoverridden
+colon/true commands followed by exit or the next helper call. Unknown commands,
+argument expansions and trap-changing helpers terminate the proof. The warning
+is at the call whose enclosing function's definite locals are lost. It does
+not duplicate SC2349 at an explicit exit in that same function.
+
+This is a scope-risk warning, not proof that a cleanup action is incorrect:
+intentionally reading an outer value may be correct. Use ordinary SC2354
+suppression in that case. There is no autofix; early expansion, explicit
+cleanup and persistent state have different semantics. Shared CFG/DFA
+transfer rules, other trap warnings and profile defaults are unchanged.
+
+### Why implicit errexit is excluded
+
+The retained runtime matrix exercises natural return, explicit return,
+errexit, condition-suppressed errexit, nested explicit exit, trap replacement
+and action-local assignment under command-string, file and stdin invocation.
+All functions in this matrix use the ordinary `f()` form.
+
+| Tested shell | After ordinary return | Implicit errexit | Nested explicit exit |
+| --- | --- | --- | --- |
+| IRIX 6.5.30 sh/ksh | outer | inner | outer |
+| macOS Bash 3.2.57 | outer | outer with -c; inner with file/stdin | outer with -c; inner with file/stdin |
+| macOS Bash 5.3.15 | outer | outer | inner |
+| Linux Bash 5.2.37 (Debian 5.2.37-2+b10) | outer | outer | inner |
+| Linux dash 0.5.12 (Debian 0.5.12-12) | outer | inner | inner |
+
+Here "inner" is the function-local value and "outer" is the shadowed global.
+This is measured behavior of those installations, not a promise for every
+version, shell option, function form or exceptional termination path. In
+particular, broadening SC2349 from explicit exit to `set -e` would introduce
+incorrect IRIX advice. A universal cross-shell trap-lifetime interpreter,
+dynamic actions, arbitrary call chains, conditional replacements, signals and
+recursive programs remain outside the bounded analysis. Silence is not proof
+that cleanup is safe. `test/exit-scope-runtime` reproduces the evidence matrix;
+it records outcomes rather than asserting that all shells must behave alike.
+
+These checks use the existing enable/disable syntax; no `profile=` or
+`feature=` directive is introduced.

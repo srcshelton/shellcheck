@@ -102,6 +102,11 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     pipelines, saved streams, substitutions, read loops and bounded static
     function calls. Unknown commands/options terminate tracking; silence is
     not proof of arbitrary-filename safety. This check is also opt-in.
+    *check-exit-trap-scope* (SC2354) checks bounded, statically known EXIT
+    actions that outlive function-local values after return, plus nested
+    explicit-exit calls on IRIX. It does not treat implicit errexit as an
+    explicit exit. Shell and control-flow limits are documented in
+    `doc/backlog-diagnostics.md`; this check is not enabled by a profile.
 
 **-P**\ *SOURCEPATH*,\ **--source-path=***SOURCEPATH*
 
