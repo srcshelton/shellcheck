@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""Fail closed on non-static/non-ARMv6/non-hard-float release artifacts."""
+import os
+import re
+import subprocess
+import sys
+
+
+def validate(header, segments, attributes):
+    def require(condition, message):
+        if not condition:
+            raise ValueError(message)
+    require(re.search(r"Class:\s+ELF32\b", header), "not ELF32")
+    require(re.search(r"Machine:\s+ARM\s*$", header, re.M), "not ARM")
+    require("little endian" in header, "not little-endian")
+    require("hard-float ABI" in header, "not hard-float ABI")
+    require(not re.search(r"\bINTERP\b", segments), "dynamic interpreter present")
+    require(not re.search(r"\bDYNAMIC\b", segments), "dynamic segment present")
+    arches = re.findall(r"Tag_CPU_arch:\s+(\S+)", attributes)
+    require(arches and all(a in ("v6", "v6K", "v6KZ", "v6ZK") for a in arches),
+            "missing or incompatible CPU architecture: " + repr(arches))
+    require(re.search(r"Tag_ABI_VFP_args:\s+VFP registers", attributes),
+            "missing VFP calling convention")
+    require(not re.search(r"Tag_FP_arch:\s+(?!VFPv2\b)\S+", attributes),
+            "requires newer floating-point instructions")
+    require("Tag_Advanced_SIMD_arch:" not in attributes, "requires SIMD")
+
+
+if __name__ == "__main__":
+    target = os.environ.get("TARGET", "armv6-unknown-linux-gnueabihf")
+    binary = sys.argv[1]
+    def read(option):
+        return subprocess.check_output([target + "-readelf", option, binary], text=True)
+    try:
+        validate(read("-h"), read("-l"), read("-A"))
+    except ValueError as error:
+        sys.exit(str(error))
+    print("PASS static ARMv6 hard-float ELF: " + binary)

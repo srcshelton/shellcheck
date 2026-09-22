@@ -1,0 +1,32 @@
+#!/bin/bash
+set -euo pipefail
+mkdir -p /scratch/source
+cd /scratch/source
+{
+    tar xz --strip-components=1
+    chmod +x striptests
+    ./striptests
+    IFS=';' read -r -a cabal_options <<< "$CABALOPTS"
+    cabal build "${cabal_options[@]}" --enable-executable-static exe:shellcheck
+    executable=$(cabal list-bin "${cabal_options[@]}" exe:shellcheck)
+    test -s "$executable"
+    mkdir "$TARGETNAME"
+    cp "$executable" "$TARGETNAME/shellcheck"
+    "$TARGET-strip" -s "$TARGETNAME/shellcheck"
+    validate-elf "$TARGETNAME/shellcheck"
+    qemu-arm-static -cpu arm1176 "$TARGETNAME/shellcheck" --version
+    # The dollar expansion belongs to the script being checked, not this driver.
+    # shellcheck disable=SC2016
+    printf '#!/bin/sh\nprintf "%%s\\n" "$1"\n' | \
+        qemu-arm-static -cpu arm1176 "$TARGETNAME/shellcheck" --norc -s sh -f json1 - > clean.json
+    set +e
+    # shellcheck disable=SC2016
+    printf '#!/bin/sh\necho $1\n' | \
+        qemu-arm-static -cpu arm1176 "$TARGETNAME/shellcheck" --norc -s sh -f json1 - > warning.json
+    warning_status=$?
+    set -e
+    test "$warning_status" -eq 1
+    python3 -c 'import json; assert json.load(open("clean.json"))["comments"] == []; assert any(c["code"] == 2086 for c in json.load(open("warning.json"))["comments"])'
+    sha256sum "$TARGETNAME/shellcheck"
+} >&2
+tar cz "$TARGETNAME"
