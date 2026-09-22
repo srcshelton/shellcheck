@@ -236,6 +236,9 @@ prop_forkOptionalsUseExpectedSeverity = all hasExpectedSeverity cases
         , ("require-shebang-space", 2342, StyleC, "#!/bin/sh\ntrue")
         , ("require-variable-quotes", 2343, StyleC, "[[ ${var} ]]")
         , ("check-unbound-variables", 2344, InfoC, "set -u; echo \"$var\"")
+        , ("require-variable-declarations", 2351, StyleC, "value=1; echo \"$value\"")
+        , ("check-function-tracing-status", 2352, InfoC,
+            "f() { false; set +x; }; if f; then :; fi")
         , ("check-exit-in-subshell", 2345, WarningC,
             "input | while read -r line; do exit 1; done")
         , ("check-irix-wait-status", 2348, WarningC,

@@ -204,6 +204,7 @@ nodeChecks = [
     ,checkCommandWithTrailingSymbol
     ,checkUnquotedParameterExpansionPattern
     ,checkIrixNestedParameterQuotes
+    ,checkLiteralQuotesInParameterWords
     ,checkBatsTestDoesNotUseNegation
     ,checkCommandIsUnreachable
     ,checkSpacefulnessCfg
@@ -237,6 +238,30 @@ prop_verifyOptionalExamples = all check optionalTreeChecks
 optionalTreeChecks :: [(CheckDescription, (Parameters -> Token -> [TokenComment]))]
 optionalTreeChecks = [
     (newCheckDescription {
+        cdName = "check-filename-streams",
+        cdOptionalCodes = [2353],
+        cdDescription = "Track filename delimiters through supported pipeline stages",
+        cdPositive = "find . -print0 | sort",
+        cdNegative = "find . -print0 | sort -z | xargs -0 rm"
+    }, checkFilenameStreamsTree)
+
+    ,(newCheckDescription {
+        cdName = "require-variable-declarations",
+        cdOptionalCodes = [2351],
+        cdDescription = "Require explicit declarations before lexical reads and writes",
+        cdPositive = "value=1; echo \"$value\"",
+        cdNegative = "export value; value=1; echo \"$value\""
+    }, checkVariableDeclarations)
+
+    ,(newCheckDescription {
+        cdName = "check-function-tracing-status",
+        cdOptionalCodes = [2352],
+        cdDescription = "Check tracing toggles used as a tested function's final status",
+        cdPositive = "f() { false; set +x; }; if f; then :; fi",
+        cdNegative = "f() { false; }; if f; then :; fi"
+    }, checkFunctionTracingStatus)
+
+    ,(newCheckDescription {
         cdName = "quote-safe-variables",
         cdOptionalCodes = [2248],
         cdDescription = "Suggest quoting variables without metacharacters",
@@ -758,6 +783,166 @@ checkPipePitfalls params (T_Pipeline id _ commands) = do
     hasParameter string =
         any (isPrefixOf string . dropWhile (== '-'))
 checkPipePitfalls _ _ = return ()
+
+
+data FilenameDelimiter = FilenameNul | FilenameNewline deriving (Eq, Show)
+
+prop_checkFilenameStreamsSort = verify checkFilenameStreams "find . -print0 | sort"
+prop_checkFilenameStreamsSafe = verifyNot checkFilenameStreams "find . -print0 | sort -z | uniq -z | xargs -0 rm"
+prop_checkFilenameStreamsReencode = verify checkFilenameStreams "find . -print0 | xargs -0 dirname | sort | uniq"
+prop_checkFilenameStreamsReencodeSafe = verifyNot checkFilenameStreams "find . -print0 | xargs -0 dirname -z | sort -z | uniq -z"
+prop_checkFilenameStreamsXargsMismatch = verify checkFilenameStreams "find . -print0 | xargs rm"
+prop_checkFilenameStreamsFindMismatch = verify checkFilenameStreams "find . -print | xargs -0 rm"
+prop_checkFilenameStreamsExisting = verifyNot checkFilenameStreams "find . | xargs rm"
+prop_checkFilenameStreamsExec = verify checkFilenameStreams "find . -exec grep -Fl needle {} + | xargs -0 dirname"
+prop_checkFilenameStreamsExecSafe = verifyNot checkFilenameStreams "find . -exec grep -FlZ needle {} + | xargs -0 rm"
+prop_checkFilenameStreamsUnknown = verifyNot checkFilenameStreams "find . -print0 | transform | xargs rm"
+prop_checkFilenameStreamsCount = verifyNot checkFilenameStreams "find . -printf '%s\\n' | sort"
+prop_checkFilenameStreamsPrintf = verify checkFilenameStreams "find . -printf '%p\\0' | sort"
+prop_checkFilenameStreamsPredicateOperand = verify checkFilenameStreams "find . -name -print0 -print | xargs -0 rm"
+prop_checkFilenameStreamsPredicateSafe = verifyNot checkFilenameStreams "find . -name -print -print0 | xargs -0 rm"
+prop_checkFilenameStreamsGrep = verify checkFilenameStreams "grep -lZ needle *.txt | sort"
+prop_checkFilenameStreamsFilter = verifyNot checkFilenameStreams "find . -print0 | grep -zv cache | sort -z"
+prop_checkFilenameStreamsFilterBad = verify checkFilenameStreams "find . -print0 | grep -v cache | xargs -0 rm"
+prop_checkFilenameStreamsCountGrep = verifyNot checkFilenameStreams "grep -c needle *.txt | sort"
+prop_checkFilenameStreamsRedirect = verifyNot checkFilenameStreams "find . -print0 >names | sort"
+prop_checkFilenameStreamsInputRedirect = verifyNot checkFilenameStreams "find . -print0 | sort <names"
+prop_checkFilenameStreamsCatFiles = verifyNot checkFilenameStreams "find . -print0 | cat other | sort"
+prop_checkFilenameStreamsCat = verify checkFilenameStreams "find . -print0 | cat | sort"
+prop_checkFilenameStreamsData = verifyNot checkFilenameStreams "printf '%s\\n' one two | sort | uniq"
+prop_checkFilenameStreamsUnknownFlags = verifyNot checkFilenameStreams "find . -print0 | sort --unknown"
+prop_checkFilenameStreamsOutputFile = verifyNot checkFilenameStreams "find . -print0 | sort -o result"
+prop_checkFilenameStreamsGrepFile = verifyNot checkFilenameStreams "find . -print0 | grep needle otherfile | sort"
+prop_checkFilenameStreamsGrepStdinLabel = verifyNot checkFilenameStreams "printf data | grep -lZ data | sort"
+prop_checkFilenameStreamsCatDash = verify checkFilenameStreams "find . -print0 | cat - | sort"
+prop_checkFilenameStreamsNoFilestream = verifyNot checkFilenameStreams "printf '%s\\n' data | xargs -0 dirname | sort"
+prop_checkFilenameStreamsFunction = verifyNot checkFilenameStreams "sort() { cat; }; find . -print0 | sort"
+prop_checkFilenameStreamsXargsCustom = verifyNot checkFilenameStreams "find . -print0 | xargs -0 transform | sort"
+prop_checkFilenameStreamsIrix = verify checkFilenameStreams "# shellcheck shell=irix-sh\nfind . -print | sort"
+-- This optional analysis describes known utility conventions, not utility
+-- availability. Unknown flags, redirections and arbitrary programs break the
+-- stream model. Never claim that an unmodelled pipeline is filename-safe.
+checkFilenameStreamsTree params root =
+    runNodeAnalysis (checkFilenameStreamsWith $ functions root) params root
+checkFilenameStreams params = checkFilenameStreamsWith (functions $ rootNode params) params
+checkFilenameStreamsWith definedFunctions params (T_Pipeline _ pipes stages@(_:_:_))
+    | all regularPipe pipes = void $ foldM step (Nothing, Nothing) stages
+  where
+    regularPipe (T_Pipe _ "|") = True
+    regularPipe _ = False
+    step (input, previous) stage = case plain stage of
+        Nothing -> return (Nothing, Just stage)
+        Just cmd -> do
+            let shadowed = maybe False (`Map.member` definedFunctions) $ getCommandName cmd
+            let result = if shadowed then Nothing else classify input cmd
+            case result of
+                Just (True, _) -> do
+                    let alreadyReported = maybe False (classic stage) previous
+                    unless alreadyReported $ warn (getId $ getCommandTokenOrThis cmd) 2353
+                        "Filename boundaries are not preserved at this pipeline stage. Use NUL-aware processing throughout, or keep filenames as separate arguments."
+                    return (Nothing, Just stage)
+                Just (False, output) -> return (output, Just stage)
+                Nothing -> return (Nothing, Just stage)
+    classic next previous = any ((== 2038) . cCode . tcComment) $
+        execWriter $ checkPipePitfalls params (T_Pipeline (getId previous) [] [previous, next])
+    plain (T_Annotation _ _ t) = plain t
+    plain (T_Redirecting _ [] t) = plain t
+    plain t@T_SimpleCommand{} = Just t
+    plain _ = Nothing
+    classify input cmd = do
+        argv <- getCommandArgv cmd
+        name <- getCommandBasename cmd
+        let args = drop 1 argv
+        case name of
+            "find" -> (,) False <$> findOutput args
+            "grep" -> do
+                (flags, operands) <- options True "EFGivwxazZlLqchHnobe:f:m:" grepLong args
+                if any (`elem` flags) ["l", "L", "files-with-matches", "files-without-match"]
+                then do
+                    guard $ not $ any (`elem` flags) ["q", "quiet", "c", "count"]
+                    let hasPattern = any (`elem` flags) ["e", "f", "regexp", "file"]
+                    let files = if hasPattern then operands else drop 1 operands
+                    guard $ not (null files) && all ((/= Just "-") . getLiteralString) files
+                    return (False, Just $ delimiter flags ["Z", "null"])
+                else do
+                    -- Only filtering preserves records. Numbering/counting or
+                    -- extracting matches produces different data.
+                    guard $ not $ any (`elem` flags) ["q", "quiet", "c", "count", "n", "line-number", "o", "only-matching", "b"]
+                    let hasPattern = any (`elem` flags) ["e", "f", "regexp", "file"]
+                    guard $ length operands == (if hasPattern then 0 else 1)
+                    return $ consume input (delimiter flags ["z", "null-data"])
+            "sort" -> do
+                (flags, operands) <- options True "zrunbfdisVk:t:S:T:cmCo:" [("zero-terminated",False)] args
+                guard $ all ((== Just "-") . getLiteralString) operands
+                guard $ not $ any (`elem` flags) ["c", "C", "o"]
+                return $ consume input (delimiter flags ["z", "zero-terminated"])
+            "uniq" -> do
+                (flags, operands) <- options False "zudif:s:w:c" [("zero-terminated",False)] args
+                guard $ null operands && "c" `notElem` flags
+                return $ consume input (delimiter flags ["z", "zero-terminated"])
+            "cat" -> do
+                (flags, operands) <- options True "u" [] args
+                guard $ null flags || flags == ["u"]
+                guard $ null operands || all ((== Just "-") . getLiteralString) operands
+                return (False, input)
+            "xargs" -> do
+                (flags, operands) <- options False "0rn:L:P:I:E:" [("null",False),("no-run-if-empty",False),("max-args",True),("replace",True)] args
+                let expected = delimiter flags ["0", "null"]
+                return $ if unsafe input expected then (True, Nothing)
+                    else (False, input >> childOutput operands)
+            _ -> Nothing
+    options gnu shorts longs args = do
+        parsed <- getOpts (gnu, False) shorts longs args
+        return (filter (not . null) $ map fst parsed, [value | ("", (_, value)) <- parsed])
+    delimiter flags nulFlags = if any (`elem` flags) nulFlags then FilenameNul else FilenameNewline
+    unsafe Nothing _ = False
+    unsafe (Just actual) expected = actual /= FilenameNul || expected /= FilenameNul
+    consume input expected = (unsafe input expected, input)
+    childOutput (name:args)
+        | getLiteralString name `elem` [Just "dirname", Just "basename"] = do
+            (flags, _) <- options True "za" [("zero",False),("multiple",False),("suffix",True)] args
+            return $ delimiter flags ["z", "zero"]
+    childOutput _ = Nothing
+    grepLong = [(name, False) | name <- ["null", "null-data", "files-with-matches", "files-without-match", "quiet", "count", "line-number", "only-matching", "invert-match", "ignore-case", "fixed-strings", "extended-regexp"]]
+        ++ [("regexp",True), ("file",True)]
+    -- Consume predicate operands before looking for output actions. A filename
+    -- or -name pattern spelling '-print0' is not an output option.
+    findOutput args = actions [] $ dropWhile isPath $ dropWhile isMode args
+      where
+        isMode t = getLiteralString t `elem` map Just ["-H", "-L", "-P"]
+        isPath t = case getLiteralString t of
+            Just text -> not ("-" `isPrefixOf` text || text `elem` ["!", "("])
+            Nothing -> True
+        actions outputs [] = case outputs of
+            [] -> Just $ Just FilenameNewline
+            first:rest | all (== first) rest -> Just first
+            _ -> Nothing
+        actions outputs (t:rest) = case getLiteralString t of
+            Just "-print0" -> actions (Just FilenameNul:outputs) rest
+            Just "-print" -> actions (Just FilenameNewline:outputs) rest
+            Just "-printf" -> case rest of
+                format:xs -> case getLiteralString format of
+                    Just "%p\\0" -> actions (Just FilenameNul:outputs) xs
+                    Just "%f\\0" -> actions (Just FilenameNul:outputs) xs
+                    Just "%p\\n" -> actions (Just FilenameNewline:outputs) xs
+                    Just "%f\\n" -> actions (Just FilenameNewline:outputs) xs
+                    _ -> actions (Nothing:outputs) xs
+                _ -> Nothing
+            Just "-exec" -> case break isEnd rest of
+                (command, _:xs) -> do
+                    let virtual = T_SimpleCommand (getId t) [] command
+                    guard $ getCommandBasename virtual == Just "grep"
+                    (_, output) <- classify Nothing virtual
+                    actions (output:outputs) xs
+                _ -> Nothing
+            Just flag | flag `elem` predicates -> case rest of
+                _:xs -> actions outputs xs
+                _ -> Nothing
+            Just flag | flag `elem` ["(", ")", "!", "-a", "-o", "-and", "-or", "-not", "-true", "-false", "-prune", "-empty", "-depth", "-xdev", "-mount", "-follow"] -> actions outputs rest
+            _ -> Nothing
+        isEnd t = getLiteralString t `elem` [Just ";", Just "+"]
+        predicates = ["-name", "-iname", "-path", "-ipath", "-regex", "-iregex", "-type", "-xtype", "-size", "-perm", "-user", "-group", "-uid", "-gid", "-mtime", "-mmin", "-atime", "-ctime", "-newer", "-maxdepth", "-mindepth", "-links", "-inum"]
+checkFilenameStreamsWith _ _ _ = return ()
 
 indexOfSublists sub = f 0
   where
@@ -2636,6 +2821,145 @@ checkQuotedParameterExpansionWords params t@(T_DollarBraced id True (T_NormalWor
 checkQuotedParameterExpansionWords _ _ = return ()
 
 
+prop_checkLiteralQuotesInParameterWordsDefault = verify checkLiteralQuotesInParameterWords "echo \"${x:-'foo'}\""
+prop_checkLiteralQuotesInParameterWordsAssign = verify checkLiteralQuotesInParameterWords "echo \"${x='foo'}\""
+prop_checkLiteralQuotesInParameterWordsAlternate = verify checkLiteralQuotesInParameterWords "echo \"${1:+'foo'}\""
+prop_checkLiteralQuotesInParameterWordsNested = verify checkLiteralQuotesInParameterWords "echo \"${x:-${y:-'foo'}}\""
+prop_checkLiteralQuotesInParameterWordsBare = verifyNot checkLiteralQuotesInParameterWords "echo ${x:-'foo'}"
+prop_checkLiteralQuotesInParameterWordsExplicit = verifyNot checkLiteralQuotesInParameterWords "echo \"${x:-\"'foo'\"}\""
+prop_checkLiteralQuotesInParameterWordsPattern = verifyNot checkLiteralQuotesInParameterWords "echo \"${x#'foo'}\""
+prop_checkLiteralQuotesInParameterWordsCommand = verifyNot checkLiteralQuotesInParameterWords "echo \"$(echo ${x:-'foo'})\""
+prop_checkLiteralQuotesInParameterWordsIrix = verify checkLiteralQuotesInParameterWords "# shellcheck shell=irix-sh\necho \"${x:-'foo'}\""
+checkLiteralQuotesInParameterWords params token@(T_DollarBraced _ True (T_NormalWord _ (T_Literal _ first:parts)))
+    | any (`isPrefixOf` getBracedModifier first) [":-", ":=", ":+", "-", "=", "+"]
+    , quoted (NE.tail $ getPath (parentMap params) token) = mapM_ check parts
+  where
+    -- Do not cross a command substitution or another independent quote context.
+    quoted (T_NormalWord {} : rest) = quoted rest
+    quoted (T_DollarBraced {} : rest) = quoted rest
+    quoted (T_DoubleQuoted {} : _) = True
+    quoted _ = False
+    check (T_SingleQuoted id _) = warn id 2350
+        "These single quotes are literal inside the double-quoted parameter expansion. Remove them if they should not be part of the value."
+    check _ = return ()
+checkLiteralQuotesInParameterWords _ _ = return ()
+
+
+prop_checkVariableDeclarationsRead = verifyTree checkVariableDeclarations "echo \"$value\""
+prop_checkVariableDeclarationsAssignment = verifyTree checkVariableDeclarations "value=1"
+prop_checkVariableDeclarationsLocal = verifyNotTree checkVariableDeclarations "f() { local value=1; echo \"$value\"; }"
+prop_checkVariableDeclarationsRhs = verifyTree checkVariableDeclarations "f() { local value=$value; }"
+prop_checkVariableDeclarationsLate = verifyTree checkVariableDeclarations "echo \"$value\"; export value"
+prop_checkVariableDeclarationsScope = verifyTree checkVariableDeclarations "f() { local value=1; }; echo \"$value\""
+prop_checkVariableDeclarationsSubshell = verifyTree checkVariableDeclarations "(export value=1); echo \"$value\""
+prop_checkVariableDeclarationsInherited = verifyNotTree checkVariableDeclarations "export value; f() { echo \"$value\"; }; (echo \"$value\")"
+prop_checkVariableDeclarationsKnown = verifyNotTree checkVariableDeclarations "echo \"$HOME:$PATH:$1:$?\""
+prop_checkVariableDeclarationsProbe = verifyTree checkVariableDeclarations "echo \"${value:-default}\""
+prop_checkVariableDeclarationsReadBuiltin = verifyNotTree checkVariableDeclarations "export value; read -r value"
+prop_checkVariableDeclarationsFor = verifyTree checkVariableDeclarations "for value in one two; do :; done"
+prop_checkVariableDeclarationsSh = verifyTree checkVariableDeclarations "#!/bin/sh\ndeclare value=1; echo \"$value\""
+prop_checkVariableDeclarationsIrix = verifyNotTree checkVariableDeclarations "# shellcheck shell=irix-sh\ntypeset value=1; echo \"$value\""
+prop_checkVariableDeclarationsBsh = verifyNotTree checkVariableDeclarations "# shellcheck shell=irix-bsh\nreadonly value=1; echo \"$value\""
+-- This is deliberately a lexical declaration policy, not a claim that a read
+-- is unbound at runtime. Keep its state entirely separate from all other flow
+-- consumers, including assignment and nounset analysis.
+checkVariableDeclarations params root = execWriter $
+    walk (getVariableFlowWith scopeFor params root) initial S.empty []
+  where
+    initial = S.fromList internalVariables
+    scopeFor p token = case token of
+        T_Function id _ _ _ _ -> FunctionScope id
+        _ -> leadType p token
+    declarations = ["export", "readonly"] ++ case shellType params of
+        Bash -> ["local", "declare", "typeset"]
+        Ksh -> ["typeset"]
+        IrixSh -> ["typeset"]
+        IrixKsh -> ["typeset"]
+        Dash -> ["local"]
+        BusyboxSh -> ["local"]
+        _ -> []
+    isDeclaration base = getCommandName base `elem` map Just declarations
+    isDeclarationOperand token =
+        maybe False isDeclaration $ Map.lookup (getId token) (parentMap params)
+    walk [] _ _ _ = return ()
+    walk (StackScope _:rest) declared warned scopes =
+        walk rest declared S.empty ((declared, warned):scopes)
+    walk (StackScopeEnd:rest) _ _ ((declared, warned):scopes) =
+        walk rest declared warned scopes
+    walk (Assignment (base, token, name, _):rest) declared warned scopes
+        | isDeclaration base = walk rest (S.insert name declared) warned scopes
+        | otherwise = use token name rest declared warned scopes
+    walk (Reference (base, token, name):rest) declared warned scopes
+        | isDeclaration base || isDeclarationOperand token = walk rest declared warned scopes
+        | otherwise = use token name rest declared warned scopes
+    walk (_:rest) declared warned scopes = walk rest declared warned scopes
+    use token name rest declared warned scopes = do
+        let missing = isVariableName name && not (S.member name declared || S.member name warned)
+        when missing $ style (getId token) 2351 $
+            "Declare " ++ name ++ " explicitly before this use (strict lexical declaration policy)."
+        walk rest declared (if missing then S.insert name warned else warned) scopes
+
+
+prop_checkFunctionTracingStatusConditional = verifyTree checkFunctionTracingStatus "f() { false; set +x; }; if f; then :; fi"
+prop_checkFunctionTracingStatusUnchecked = verifyNotTree checkFunctionTracingStatus "f() { false; set +x; }; f"
+prop_checkFunctionTracingStatusExplicit = verifyNotTree checkFunctionTracingStatus "f() { false; status=$?; set +x; return \"$status\"; }; if f; then :; fi"
+prop_checkFunctionTracingStatusGuarded = verifyNotTree checkFunctionTracingStatus "f() { command || return; set +x; }; f && echo ok"
+prop_checkFunctionTracingStatusReturn = verifyNotTree checkFunctionTracingStatus "f() { false; return 0; }; f && echo ok"
+prop_checkFunctionTracingStatusOnlyToggle = verifyNotTree checkFunctionTracingStatus "f() { set +x; }; f && echo ok"
+prop_checkFunctionTracingStatusArguments = verifyNotTree checkFunctionTracingStatus "f() { false; set -- a b; }; f && echo ok"
+prop_checkFunctionTracingStatusNamed = verifyTree checkFunctionTracingStatus "f() { false; set +o xtrace; }; f || echo fail"
+prop_checkFunctionTracingStatusRedefined = verifyNotTree checkFunctionTracingStatus "f() { false; set +x; }; f() { false; }; f || echo fail"
+prop_checkFunctionTracingStatusIrix = verifyTree checkFunctionTracingStatus "# shellcheck shell=irix-sh\nf() { false; set +x; }; f || echo fail"
+prop_checkFunctionTracingStatusSubstitution = verifyNotTree checkFunctionTracingStatus "f() { false; set +x; }; if echo \"$(f)\"; then :; fi"
+prop_checkFunctionTracingStatusPipeline = verifyNotTree checkFunctionTracingStatus "f() { false; set +x; }; if f | cat; then :; fi"
+prop_checkFunctionTracingStatusGroup = verifyTree checkFunctionTracingStatus "f() { false; set +x; }; if { :; f; }; then :; fi"
+prop_checkFunctionTracingStatusReplaced = verifyNotTree checkFunctionTracingStatus "f() { false; set +x; }; if { f; true; }; then :; fi"
+prop_checkFunctionTracingStatusBackground = verifyNotTree checkFunctionTracingStatus "f() { false; set +x; }; if { f & }; then :; fi"
+prop_checkFunctionTracingStatusSetFunction = verifyNotTree checkFunctionTracingStatus "set() { false; }; f() { false; set +x; }; if f; then :; fi"
+checkFunctionTracingStatus params root = execWriter $ mapM_ check $ Map.toList definitions
+  where
+    definitions = Map.fromListWith (++) $ execWriter $ doAnalysis (tell . function) root
+    function t@(T_Function _ _ _ name _) = [(name, [t])]
+    function _ = []
+    calls = execWriter $ doAnalysis (tell . call) root
+    call t@T_SimpleCommand{} =
+        [(name, t) | name <- maybeToList $ getCommandName t,
+            tested (NE.toList $ getPath (parentMap params) t)]
+    call _ = []
+    tested (child:parent:rest) = case parent of
+        T_Annotation {} -> tested (parent:rest)
+        T_Redirecting _ [] _ -> tested (parent:rest)
+        T_Pipeline _ _ [_] -> tested (parent:rest)
+        T_BraceGroup _ commands -> lastIs child commands && tested (parent:rest)
+        T_Subshell _ commands -> lastIs child commands && tested (parent:rest)
+        T_AndIf _ left _ -> getId child == getId left || tested (parent:rest)
+        T_OrIf _ left _ -> getId child == getId left || tested (parent:rest)
+        T_Banged {} -> True
+        T_IfExpression _ branches _ -> any (lastIs child . fst) branches
+        T_WhileExpression _ condition _ -> lastIs child condition
+        T_UntilExpression _ condition _ -> lastIs child condition
+        _ -> False
+    tested _ = False
+    lastIs token tokens = map getId (take 1 $ reverse tokens) == [getId token]
+    check (name, [T_Function _ _ _ _ body])
+        | Map.notMember "set" definitions, any ((== name) . fst) calls = sequence_ $ do
+            [commands] <- return $ getCommandSequences body
+            final:previous:_ <- return $ reverse commands
+            cmd <- simple final
+            prior <- simple previous
+            guard $ getCommandName prior `notElem` [Just "true", Just ":", Just "return", Just "exit", Just "set"]
+            guard $ oversimplify cmd `elem` [["set", "+x"], ["set", "-x"],
+                ["set", "+o", "xtrace"], ["set", "-o", "xtrace"]]
+            return $ info (getId cmd) 2352
+                "This function's tested status comes from the final tracing toggle. Save and return the preceding status if that is what the caller needs."
+    check _ = return ()
+    simple (T_Pipeline _ _ [cmd]) = simple cmd
+    simple (T_Annotation _ _ cmd) = simple cmd
+    simple (T_Redirecting _ [] cmd) = simple cmd
+    simple t@T_SimpleCommand{} = Just t
+    simple _ = Nothing
+
+
 prop_checkSingleQuotedCasePatterns1 = verify checkSingleQuotedCasePatterns "case $var in value) echo yes;; esac"
 prop_checkSingleQuotedCasePatterns2 = verifyNot checkSingleQuotedCasePatterns "case $var in 'value') echo yes;; esac"
 prop_checkSingleQuotedCasePatterns3 = verify checkSingleQuotedCasePatterns "case $var in val*) echo yes;; esac"
@@ -3671,6 +3995,9 @@ checkFunctionDeclarations _ _ = return ()
 
 prop_checkStderrPipe1 = verify checkStderrPipe "#!/bin/ksh\nfoo |& bar"
 prop_checkStderrPipe2 = verifyNot checkStderrPipe "#!/bin/bash\nfoo |& bar"
+prop_checkStderrPipeWording = verifyMessage checkStderrPipe 2118
+    "In Ksh, |& starts a coprocess; it does not pipe stderr. Use 2>&1 | for that."
+    "#!/bin/ksh\nfoo |& bar"
 prop_checkStderrPipeIrix = verify checkStderrPipe "# shellcheck shell=irix-sh\nfoo |& bar"
 checkStderrPipe params =
     case shellType params of
@@ -3680,7 +4007,7 @@ checkStderrPipe params =
         _ -> const $ return ()
   where
     match (T_Pipe id "|&") =
-        err id 2118 "Ksh does not support |&. Use 2>&1 |."
+        err id 2118 "In Ksh, |& starts a coprocess; it does not pipe stderr. Use 2>&1 | for that."
     match _ = return ()
     matchIrix (T_Pipe id "|&") =
         err id 2118 "In IRIX sh, |& starts a coprocess and does not take a pipeline command."

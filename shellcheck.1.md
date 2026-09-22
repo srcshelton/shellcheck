@@ -89,6 +89,19 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     Subsequent **-o** options accumulate. This is equivalent to specifying
     **enable** directives.
 
+    *require-variable-declarations* enables the strict lexical declaration
+    policy (SC2351): ordinary reads and assignments must follow a recognized
+    explicit declaration. This is not a runtime unbound-variable check;
+    declarations are considered in source order, and function/subshell scopes
+    are isolated. Known shell/environment variables are exempt.
+    *check-function-tracing-status* (SC2352) advises about trailing tracing
+    toggles in functions whose status is directly tested. Neither policy is
+    enabled by default, including under the IRIX profiles. See
+    `doc/backlog-diagnostics.md` for exact boundaries and examples.
+    *check-filename-streams* (SC2353) tracks filename delimiters through known
+    pipeline stages. Unknown commands/options terminate tracking; silence is
+    not proof of arbitrary-filename safety. This check is also opt-in.
+
 **-P**\ *SOURCEPATH*,\ **--source-path=***SOURCEPATH*
 
 :   Specify paths to search for sourced files, separated by `:` on Unix and

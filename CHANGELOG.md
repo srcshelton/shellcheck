@@ -1,5 +1,14 @@
 ## Unreleased
 ### Added
+- Opt-in `check-filename-streams` (SC2353): track filename record delimiters
+  through supported pipeline stages, including loss of NUL separation after
+  xargs invokes dirname/basename. Unknown transformations end tracking.
+- SC2350: warn about literal single quotes in double-quoted parameter default,
+  assignment and alternate-value words (#2561).
+- Opt-in `require-variable-declarations` (SC2351): strict lexical declaration
+  policy, independent of assignment/nounset diagnostics (#243).
+- Opt-in `check-function-tracing-status` (SC2352): informational advice for
+  trailing tracing toggles in directly condition-tested functions (#2439).
 - SC2349: conservative IRIX sh/ksh warning when a delayed EXIT action may read
   outer or unset values after an explicitly exiting function's locals unwind.
   Accounts for static cleanup helpers and assignments; offers no autofix.
@@ -12,6 +21,10 @@
   profiles; native shells require `base#digits`, such as `16#1a`.
 
 ### Fixed
+- SC2118 explains Ksh coprocess semantics rather than claiming `|&` is
+  unsupported (#3524).
+- SC2155 detects command substitutions nested in parameter-expansion words,
+  preserving readonly-local exemptions (#2456).
 - SC2030/SC2031 distinguish independent function-local bindings with the same
   name while retaining warnings for genuine writes lost across subshells.
 - SC2218 detects top-level forward calls in terminating error branches,

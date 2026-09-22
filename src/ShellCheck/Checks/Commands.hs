@@ -1461,6 +1461,14 @@ prop_checkMaskedReturns12 = verify (checkMaskedReturns "typeset") "typeset -r x=
 prop_checkMaskedReturns13 = verify (checkMaskedReturns "typeset") "f() { typeset -g x=$(false); }"
 prop_checkMaskedReturns14 = verify (checkMaskedReturns "declare") "declare x=${ false; }"
 prop_checkMaskedReturns15 = verify (checkMaskedReturns "declare") "f() { declare x=$(false); }"
+prop_checkMaskedReturnsDefault = verify (checkMaskedReturns "declare") "declare x=${a:-$(false)}"
+prop_checkMaskedReturnsNested = verify (checkMaskedReturns "export") "export x=\"${a:-${b:+`false`}}\""
+prop_checkMaskedReturnsAlternate = verify (checkMaskedReturns "typeset") "typeset x=${a+$(false)}"
+prop_checkMaskedReturnsSeparateDefault = verifyNot (checkMaskedReturns "declare") "declare x; x=${a:-$(false)}"
+prop_checkMaskedReturnsLiteralDefault = verifyNot (checkMaskedReturns "declare") "declare x=${a:-literal}"
+prop_checkMaskedReturnsLocalReadonlyDefault = verifyNot (checkMaskedReturns "local") "f() { local -r x=${a:-$(false)}; }"
+prop_checkMaskedReturnsProcessSub = verifyNot (checkMaskedReturns "declare") "declare x=${a:-<(false)}"
+prop_checkMaskedReturnsMultipleDefaults = verify (checkMaskedReturns "declare") "declare x=${a:-$(false)}${b:-$(false)}"
 checkMaskedReturns str = CommandCheck (Exactly str) checkCmd
   where
     checkCmd t = do
@@ -1499,6 +1507,11 @@ checkMaskedReturns str = CommandCheck (Exactly str) checkCmd
         T_Backticked {} -> True
         T_DollarExpansion {} -> True
         T_DollarBraceCommandExpansion {} -> True
+        -- Descend through expansion words, not process substitutions or the
+        -- bodies of nested commands whose statuses belong to another shell.
+        T_DollarBraced _ _ word -> hasReturn word
+        T_NormalWord _ parts -> any hasReturn parts
+        T_DoubleQuoted _ parts -> any hasReturn parts
         _ -> False
 
 

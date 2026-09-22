@@ -27,6 +27,7 @@ tested-with: GHC == 8.0, GHC == 8.10, GHC == 9.0.1, GHC == 9.4.7, GHC == 9.6.6
 Extra-Doc-Files:
     README.md
     CHANGELOG.md
+    doc/backlog-diagnostics.md
 Extra-Source-Files:
     -- documentation
     shellcheck.1.md
@@ -36,6 +37,9 @@ Extra-Source-Files:
     striptests
     -- tests
     test/shellcheck.hs
+    test/backlog-diagnostics.py
+    test/filename-streams.py
+    test/filename-streams-runtime.py
 
 source-repository head
     type: git
