@@ -39,6 +39,16 @@ WORKDIR /ghc
 RUN curl -fL --retry 3 -o ghc.tar.xz https://downloads.haskell.org/~ghc/9.12.2/ghc-9.12.2-src.tar.xz \
     && echo '0e49cd5dde43f348c5716e5de9a5d7a0f8d68d945dc41cf75dfdefe65084f933  ghc.tar.xz' | sha256sum -c - \
     && tar xf ghc.tar.xz --strip-components=1 && rm ghc.tar.xz
+# Binutils BFD still has ARM COPY-relocation bug16177; recent binutils no
+# longer provides gold. Let GHC discover LLD and verify its unchanged probe.
+RUN apt-get update && apt-get install -y --no-install-recommends lld-19 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/bin/ld.lld-19 "/opt/armv6-toolchain/bin/$TARGET-ld.lld" \
+    && ln -s /usr/bin/ld.lld-19 /usr/local/bin/ld.lld \
+    && "$TARGET-gcc" -O2 -static -fuse-ld=lld /qualification/abi-probe.c -o /qualification/lld-abi-probe \
+    && validate-elf /qualification/lld-abi-probe \
+    && qemu-arm-static -cpu arm1176 /qualification/lld-abi-probe \
+    && dpkg-query -W > /qualification/packages.tsv
 RUN ./boot.source \
     && CC="$TARGET-gcc" CXX="$TARGET-g++" CC_STAGE0=gcc CXX_STAGE0=g++ \
        LLC=llc-19 OPT=opt-19 LLVMAS=clang-19 \

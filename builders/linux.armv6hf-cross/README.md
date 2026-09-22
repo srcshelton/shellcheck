@@ -46,3 +46,5 @@ Primary source references:
 - https://github.com/ghc/ghc/blob/ghc-9.12.2-release/llvm-targets
 - https://github.com/ghc/ghc/blob/ghc-9.12.2-release/m4/get_arm_isa.m4
 - https://github.com/ghc/ghc/blob/ghc-9.12.2-release/configure.ac
+- https://github.com/ghc/ghc/blob/ghc-9.12.2-release/m4/check_ld_copy_bug.m4
+- https://github.com/ghc/ghc/blob/ghc-9.12.2-release/m4/find_ld.m4
