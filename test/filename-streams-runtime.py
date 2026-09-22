@@ -30,4 +30,17 @@ with tempfile.TemporaryDirectory(prefix="filename-records-", dir=sys.argv[1]) as
     # Show that a delimiter mismatch is real, even without xargs or deletion.
     bad_sort = run("find . -type f -print0 | LC_ALL=C sort")
     assert bad_sort != run("find . -type f -print0 | LC_ALL=C sort -z")
-print("PASS 4 real GNU filename-delimiter contracts; private scratch removed")
+    files = run("find . -name input.txt -print0 | LC_ALL=C sort -z")
+    saved = run("find . -name input.txt -print0 > list; cat list | LC_ALL=C sort -z")
+    assert saved == files
+    loop = run('find . -name input.txt -print0 | while IFS= read -r -d "" name; do copy=$name; printf "%s\\0" "$copy"; done | LC_ALL=C sort -z')
+    assert loop == files
+    wrapper = run('produce() { find . -name input.txt -print0; }; consume() { LC_ALL=C sort -z; }; produce | consume')
+    assert wrapper == files
+    process = run("LC_ALL=C sort -z < <(find . -name input.txt -print0)")
+    assert process == files
+    captured = run('names=$(find . -name input.txt -print0); printf "%s" "$names"')
+    assert b"\0" not in captured and captured != files
+    reencoded = run('find . -name input.txt -print0 | while IFS= read -r -d "" name; do printf "%s\\n" "$name"; done')
+    assert len(reencoded.splitlines()) > len(names)
+print("PASS 10 real GNU filename-delimiter contracts; private scratch removed")

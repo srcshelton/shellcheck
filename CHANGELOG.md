@@ -1,7 +1,8 @@
 ## Unreleased
 ### Added
 - Opt-in `check-filename-streams` (SC2353): track filename record delimiters
-  through supported pipeline stages, including loss of NUL separation after
+  through supported pipelines, saved files, substitutions, read loops and
+  bounded static function calls, including loss of NUL separation after
   xargs invokes dirname/basename. Unknown transformations end tracking.
 - SC2350: warn about literal single quotes in double-quoted parameter default,
   assignment and alternate-value words (#2561).

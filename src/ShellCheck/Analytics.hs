@@ -44,6 +44,7 @@ import Control.Monad.Reader
 import Data.Array (listArray)
 import Data.Char
 import Data.Functor
+import Data.Foldable (toList)
 import Data.Function (on)
 import Data.List
 import Data.Maybe
@@ -823,7 +824,7 @@ prop_checkFilenameStreamsIrix = verify checkFilenameStreams "# shellcheck shell=
 -- availability. Unknown flags, redirections and arbitrary programs break the
 -- stream model. Never claim that an unmodelled pipeline is filename-safe.
 checkFilenameStreamsTree params root =
-    runNodeAnalysis (checkFilenameStreamsWith $ functions root) params root
+    checkFilenameFlow params root
 checkFilenameStreams params = checkFilenameStreamsWith (functions $ rootNode params) params
 checkFilenameStreamsWith definedFunctions params (T_Pipeline _ pipes stages@(_:_:_))
     | all regularPipe pipes = void $ foldM step (Nothing, Nothing) stages
@@ -834,7 +835,7 @@ checkFilenameStreamsWith definedFunctions params (T_Pipeline _ pipes stages@(_:_
         Nothing -> return (Nothing, Just stage)
         Just cmd -> do
             let shadowed = maybe False (`Map.member` definedFunctions) $ getCommandName cmd
-            let result = if shadowed then Nothing else classify input cmd
+            let result = if shadowed then Nothing else classifyFilenameCommand input cmd
             case result of
                 Just (True, _) -> do
                     let alreadyReported = maybe False (classic stage) previous
@@ -849,48 +850,51 @@ checkFilenameStreamsWith definedFunctions params (T_Pipeline _ pipes stages@(_:_
     plain (T_Redirecting _ [] t) = plain t
     plain t@T_SimpleCommand{} = Just t
     plain _ = Nothing
-    classify input cmd = do
-        argv <- getCommandArgv cmd
-        name <- getCommandBasename cmd
-        let args = drop 1 argv
-        case name of
-            "find" -> (,) False <$> findOutput args
-            "grep" -> do
-                (flags, operands) <- options True "EFGivwxazZlLqchHnobe:f:m:" grepLong args
-                if any (`elem` flags) ["l", "L", "files-with-matches", "files-without-match"]
-                then do
-                    guard $ not $ any (`elem` flags) ["q", "quiet", "c", "count"]
-                    let hasPattern = any (`elem` flags) ["e", "f", "regexp", "file"]
-                    let files = if hasPattern then operands else drop 1 operands
-                    guard $ not (null files) && all ((/= Just "-") . getLiteralString) files
-                    return (False, Just $ delimiter flags ["Z", "null"])
-                else do
-                    -- Only filtering preserves records. Numbering/counting or
-                    -- extracting matches produces different data.
-                    guard $ not $ any (`elem` flags) ["q", "quiet", "c", "count", "n", "line-number", "o", "only-matching", "b"]
-                    let hasPattern = any (`elem` flags) ["e", "f", "regexp", "file"]
-                    guard $ length operands == (if hasPattern then 0 else 1)
-                    return $ consume input (delimiter flags ["z", "null-data"])
-            "sort" -> do
-                (flags, operands) <- options True "zrunbfdisVk:t:S:T:cmCo:" [("zero-terminated",False)] args
-                guard $ all ((== Just "-") . getLiteralString) operands
-                guard $ not $ any (`elem` flags) ["c", "C", "o"]
-                return $ consume input (delimiter flags ["z", "zero-terminated"])
-            "uniq" -> do
-                (flags, operands) <- options False "zudif:s:w:c" [("zero-terminated",False)] args
-                guard $ null operands && "c" `notElem` flags
-                return $ consume input (delimiter flags ["z", "zero-terminated"])
-            "cat" -> do
-                (flags, operands) <- options True "u" [] args
-                guard $ null flags || flags == ["u"]
-                guard $ null operands || all ((== Just "-") . getLiteralString) operands
-                return (False, input)
-            "xargs" -> do
-                (flags, operands) <- options False "0rn:L:P:I:E:" [("null",False),("no-run-if-empty",False),("max-args",True),("replace",True)] args
-                let expected = delimiter flags ["0", "null"]
-                return $ if unsafe input expected then (True, Nothing)
-                    else (False, input >> childOutput operands)
-            _ -> Nothing
+checkFilenameStreamsWith _ _ _ = return ()
+
+classifyFilenameCommand input cmd = do
+    argv <- getCommandArgv cmd
+    name <- getCommandBasename cmd
+    let args = drop 1 argv
+    case name of
+        "find" -> (,) False <$> findOutput args
+        "grep" -> do
+            (flags, operands) <- options True "EFGivwxazZlLqchHnobe:f:m:" grepLong args
+            if any (`elem` flags) ["l", "L", "files-with-matches", "files-without-match"]
+            then do
+                guard $ not $ any (`elem` flags) ["q", "quiet", "c", "count"]
+                let hasPattern = any (`elem` flags) ["e", "f", "regexp", "file"]
+                let files = if hasPattern then operands else drop 1 operands
+                guard $ not (null files) && all ((/= Just "-") . getLiteralString) files
+                return (False, Just $ delimiter flags ["Z", "null"])
+            else do
+                -- Only filtering preserves records. Numbering/counting or
+                -- extracting matches produces different data.
+                guard $ not $ any (`elem` flags) ["q", "quiet", "c", "count", "n", "line-number", "o", "only-matching", "b"]
+                let hasPattern = any (`elem` flags) ["e", "f", "regexp", "file"]
+                guard $ length operands == (if hasPattern then 0 else 1)
+                return $ consume input (delimiter flags ["z", "null-data"])
+        "sort" -> do
+            (flags, operands) <- options True "zrunbfdisVk:t:S:T:cmCo:" [("zero-terminated",False)] args
+            guard $ all ((== Just "-") . getLiteralString) operands
+            guard $ not $ any (`elem` flags) ["c", "C", "o"]
+            return $ consume input (delimiter flags ["z", "zero-terminated"])
+        "uniq" -> do
+            (flags, operands) <- options False "zudif:s:w:c" [("zero-terminated",False)] args
+            guard $ null operands && "c" `notElem` flags
+            return $ consume input (delimiter flags ["z", "zero-terminated"])
+        "cat" -> do
+            (flags, operands) <- options True "u" [] args
+            guard $ null flags || flags == ["u"]
+            guard $ null operands || all ((== Just "-") . getLiteralString) operands
+            return (False, input)
+        "xargs" -> do
+            (flags, operands) <- options False "0rn:L:P:I:E:" [("null",False),("no-run-if-empty",False),("max-args",True),("replace",True)] args
+            let expected = delimiter flags ["0", "null"]
+            return $ if unsafe input expected then (True, Nothing)
+                else (False, input >> childOutput operands)
+        _ -> Nothing
+  where
     options gnu shorts longs args = do
         parsed <- getOpts (gnu, False) shorts longs args
         return (filter (not . null) $ map fst parsed, [value | ("", (_, value)) <- parsed])
@@ -932,7 +936,7 @@ checkFilenameStreamsWith definedFunctions params (T_Pipeline _ pipes stages@(_:_
                 (command, _:xs) -> do
                     let virtual = T_SimpleCommand (getId t) [] command
                     guard $ getCommandBasename virtual == Just "grep"
-                    (_, output) <- classify Nothing virtual
+                    (_, output) <- classifyFilenameCommand Nothing virtual
                     actions (output:outputs) xs
                 _ -> Nothing
             Just flag | flag `elem` predicates -> case rest of
@@ -942,7 +946,348 @@ checkFilenameStreamsWith definedFunctions params (T_Pipeline _ pipes stages@(_:_
             _ -> Nothing
         isEnd t = getLiteralString t `elem` [Just ";", Just "+"]
         predicates = ["-name", "-iname", "-path", "-ipath", "-regex", "-iregex", "-type", "-xtype", "-size", "-perm", "-user", "-group", "-uid", "-gid", "-mtime", "-mmin", "-atime", "-ctime", "-newer", "-maxdepth", "-mindepth", "-links", "-inum"]
-checkFilenameStreamsWith _ _ _ = return ()
+
+-- Diagnostic-private facts: Unknown is not the empty stream.
+data FilenameOutput = FilenameSilent | FilenameUnknown
+    | FilenameRecords FilenameDelimiter deriving (Eq, Show)
+data FilenameFacts = FilenameFacts {
+    filenameFiles :: Map.Map String FilenameOutput,
+    filenameScalars :: S.Set String,
+    filenameDefinitions :: Map.Map String Token,
+    filenameEmptyIFS :: Bool
+} deriving (Eq, Show)
+
+prop_filenameFlowFiles = verifyTree checkFilenameFlow "find . -print0 > list; sort < list"
+prop_filenameFlowOverwrite = verifyNotTree checkFilenameFlow "find . -print0 > list; : > list; sort < list"
+prop_filenameFlowCapture = verifyTree checkFilenameFlow "names=$(find . -print0)"
+prop_filenameFlowWrapper = verifyTree checkFilenameFlow "f() { find . -print0; }; f | sort"
+prop_filenameFlowRecursive = verifyNotTree checkFilenameFlow "f() { f; }; f | sort"
+prop_filenameFlowRead = verifyTree checkFilenameFlow "find . -print0 | while read f; do :; done"
+prop_filenameFlowReadSafe = verifyNotTree checkFilenameFlow "find . -print0 | while IFS= read -r -d '' f; do printf '%s\\0' \"$f\"; done | sort -z"
+prop_filenameFlowReadReencode = verifyTree checkFilenameFlow "find . -print0 | while IFS= read -r -d '' f; do printf '%s\\n' \"$f\"; done | sort"
+prop_filenameFlowProcess = verifyTree checkFilenameFlow "sort < <(find . -print0)"
+prop_filenameFlowAmbiguous = verifyNotTree checkFilenameFlow "if cond; then find . -print0 > list; fi; sort < list"
+
+checkFilenameFlow params root = nub $ execWriter $ void $
+    execute [] empty FilenameUnknown root
+  where
+    empty = FilenameFacts Map.empty S.empty Map.empty False
+    definitions = Map.fromListWith (+)
+        [(name, 1 :: Int) | T_Function _ _ _ name _ <- Map.elems $ getTokenMap root]
+    bodies = Map.fromList [(name,body) | T_Function _ _ _ name body <- Map.elems $ getTokenMap root]
+    -- Bound expanded work, not just stack depth: fan-out must not turn eight
+    -- levels of tiny wrappers into exponential analysis time.
+    affordable name = isJust $ cost [] (1000 :: Int) name
+    cost visited budget name = do
+        guard $ budget > 0 && length visited < 8 && not (elem name visited)
+        body <- Map.lookup name bodies
+        let parts = Map.elems $ getTokenMap body
+            calls = [callee | command@T_SimpleCommand{} <- parts,
+                Just callee <- [getCommandName command], Map.member callee bodies]
+        guard $ length parts < budget
+        foldM (cost (name:visited)) (budget - length parts) calls
+    forget facts = facts { filenameFiles = Map.empty, filenameScalars = S.empty,
+        filenameEmptyIFS = False }
+    clearFiles facts = facts { filenameFiles = Map.empty }
+    merge a b = FilenameFacts
+        (sameMap (filenameFiles a) (filenameFiles b))
+        (S.intersection (filenameScalars a) (filenameScalars b))
+        (sameMap (filenameDefinitions a) (filenameDefinitions b))
+        (filenameEmptyIFS a && filenameEmptyIFS b)
+    sameMap a b = Map.filterWithKey (\key value -> Map.lookup key b == Just value) a
+    append FilenameSilent x = x
+    append x FilenameSilent = x
+    append a b | a == b = a
+    append _ _ = FilenameUnknown
+    fromStream = maybe FilenameUnknown FilenameRecords
+    toStream (FilenameRecords d) = Just d
+    toStream _ = Nothing
+    report token message = warn (getId token) 2353 message
+    mismatch token = report (getCommandTokenOrThis token)
+        "Filename boundaries are not preserved here. Use NUL-aware processing throughout, or keep filenames as separate arguments."
+    children (OuterToken _ inner) = toList inner
+
+    sequenceOf calls facts input body = do
+        (state, output, _) <- foldM step (facts, FilenameSilent, input) body
+        return (state, output)
+      where
+        step (state, output, remaining) token = do
+            (next, result) <- execute calls state remaining token
+            return (next, append output result,
+                if preservesInput token then remaining else FilenameUnknown)
+    preservesInput token = case token of
+        T_Function{} -> True
+        T_Annotation _ _ child -> preservesInput child
+        T_Pipeline _ [] [child] -> preservesInput child
+        T_Redirecting _ [] child -> preservesInput child
+        T_SimpleCommand _ assignments argv ->
+            not (any (any isCommandExpansion . Map.elems . getTokenMap) $ assignments ++ argv)
+            && (null argv || (elem (getCommandName token)
+                (map Just [":","true","false","printf","local","typeset","declare","export","readonly"])
+                && maybe True (\name -> not $ Map.member name definitions) (getCommandName token)))
+        _ -> False
+
+    execute calls facts input token
+      | Just cfga <- cfgAnalysis params
+      , Just incoming <- CF.getIncomingState cfga (getId token)
+      , not (CF.stateIsReachable incoming) = return (forget facts, FilenameSilent)
+      | otherwise = case token of
+        T_Annotation _ _ child -> execute calls facts input child
+        T_Script _ _ body -> sequenceOf calls facts input body
+        T_BraceGroup _ body -> sequenceOf calls facts input body
+        T_Subshell _ body -> do
+            (_, output) <- sequenceOf calls facts input body
+            return (clearFiles facts, output)
+        T_Pipeline _ pipes stages
+            | all regularPipe pipes -> do
+                (next, output, _) <- foldM stage (facts, input, Nothing) stages
+                return (if length stages > 1 then next {
+                    filenameScalars = filenameScalars facts,
+                    filenameEmptyIFS = filenameEmptyIFS facts,
+                    filenameDefinitions = filenameDefinitions facts
+                    } else next, output)
+            | otherwise -> opaque calls facts token
+          where
+            stage (state, stream, previous) current = do
+                let ((next, output), comments) =
+                        runWriter $ execute calls state stream current
+                    classic = maybe False (\before -> any ((== 2038) . cCode . tcComment) $
+                        execWriter $ checkPipePitfalls params
+                            (T_Pipeline (getId token) [] [before,current])) previous
+                tell $ if classic then filter ((/= 2353) . cCode . tcComment) comments else comments
+                return (next, output, Just current)
+        T_Redirecting _ [] child -> execute calls facts input child
+        T_Redirecting _ redirects child -> redirected calls facts input redirects child
+        T_Function _ _ _ name body -> do
+            -- Check uncalled bodies too, without assuming caller input.
+            void $ execute (name:calls) (forget facts) FilenameUnknown body
+            let known = if Map.lookup name definitions == Just 1
+                    then Map.insert name body (filenameDefinitions facts)
+                    else Map.delete name (filenameDefinitions facts)
+            return (facts {filenameDefinitions = known}, FilenameSilent)
+        T_AndIf _ a b -> conditional calls facts input a b
+        T_OrIf _ a b -> conditional calls facts input a b
+        T_IfExpression _ branches otherwiseBody -> do
+            mapM_ (sequenceOf calls (forget facts) input . fst) branches
+            results <- mapM (sequenceOf calls (forget facts) input)
+                (map snd branches ++ [otherwiseBody])
+            return (foldl1 merge (map fst results),
+                foldl append FilenameSilent (map snd results))
+        T_WhileExpression _ condition body -> readLoop calls facts input condition body
+        T_ForIn _ name words body | not (null words) && all isGlob words -> do
+            let loopFacts = (forget facts) {filenameScalars = S.singleton name}
+            (_, output) <- sequenceOf calls loopFacts FilenameUnknown body
+            return (forget facts, output)
+        T_SimpleCommand _ assignments argv -> simple calls facts input token assignments argv
+        _ -> opaque calls facts token
+
+    regularPipe (T_Pipe _ "|") = True
+    regularPipe _ = False
+    conditional calls facts input a b = do
+        (first, left) <- execute calls facts input a
+        (second, right) <- execute calls first input b
+        return (merge first second, if right == FilenameSilent then left else FilenameUnknown)
+    opaque calls facts token = do
+        mapM_ (execute calls (forget facts) FilenameUnknown) (children token)
+        return (forget facts, FilenameUnknown)
+
+    -- Syntax-local identity, not a filesystem alias/existence assertion.
+    -- Unknown writes/commands/cwd changes/variable mutation discard facts.
+    fileKey word = case word of
+        T_NormalWord _ [part] -> fileKey part
+        T_DoubleQuoted _ [part] -> fileKey part
+        T_DollarBraced _ _ value -> do
+            name <- getLiteralString value
+            guard $ isVariableName name
+            return $ "$" ++ name
+        _ -> do
+            name <- getLiteralString word
+            guard $ not (null name) && name /= "-" && not (elem '~' name)
+            return $ "literal:" ++ name
+    fileInput calls facts word = case unwrap word of
+        T_ProcSub _ "<" body -> snd <$> sequenceOf calls facts FilenameUnknown body
+        _ -> return $ fromMaybe FilenameUnknown $ fileKey word >>= \key -> Map.lookup key (filenameFiles facts)
+    unwrap (T_NormalWord _ [part]) = unwrap part
+    unwrap (T_DoubleQuoted _ [part]) = unwrap part
+    unwrap token = token
+
+    redirected calls facts input redirects child = case mapM redirection redirects of
+        Just descriptors | length [() | ("in",_) <- descriptors] <= 1
+                         && length [() | ("out",_) <- descriptors] <= 1 -> do
+            stream <- case [word | ("in",word) <- descriptors] of
+                [word] -> fileInput calls facts word
+                _ -> return input
+            let outputs = [word | ("out",word) <- descriptors]
+                before = if null outputs then facts else clearFiles facts
+                aliases = any (\o -> any (\(_,i) -> fileKey o == fileKey i) $
+                    filter ((== "in") . fst) descriptors) outputs
+            (after, result) <- execute calls before
+                (if aliases then FilenameUnknown else stream) child
+            case outputs of
+                [word] -> return (after {filenameFiles =
+                    maybe Map.empty (\key -> Map.singleton key result) (fileKey word)}, FilenameSilent)
+                _ -> return (after, result)
+        _ -> opaque calls facts child
+      where
+        redirection (T_FdRedirect _ fd (T_IoFile _ T_Less{} word))
+            | elem fd ["","0"] = Just ("in",word)
+        redirection (T_FdRedirect _ fd (T_IoFile _ T_Greater{} word))
+            | elem fd ["","1"] = Just ("out",word)
+        redirection _ = Nothing
+
+    scalar facts word = case unwrap word of
+        T_DollarBraced _ _ value -> maybe False (\name -> S.member name $ filenameScalars facts) $
+            getLiteralString value
+        _ -> False
+    expansion calls facts token = case token of
+        T_DollarExpansion _ body -> capture body
+        T_Backticked _ body -> capture body
+        T_ProcSub _ _ body -> void $ sequenceOf calls facts FilenameUnknown body
+        _ -> mapM_ (expansion calls facts) (children token)
+      where
+        capture body = do
+            (_, output) <- sequenceOf calls facts FilenameUnknown body
+            case output of
+                FilenameRecords _ -> report token
+                    "Command substitution does not preserve arbitrary filename records (NUL bytes or trailing newlines). Keep the stream outside shell variables, or pass filenames as separate arguments."
+                _ -> return ()
+    assignment facts (T_Assignment _ Assign name [] value) =
+        (clearFiles facts) {
+            filenameScalars = (if scalar facts value then S.insert else S.delete) name (filenameScalars facts),
+            filenameEmptyIFS = if name == "IFS" then getLiteralString value == Just "" else filenameEmptyIFS facts
+        }
+    assignment facts _ = forget facts
+
+    simple calls facts input cmd assignments argv = do
+        mapM_ (expansion calls facts) (assignments ++ argv)
+        let hasExpansion = any (any isCommandExpansion . Map.elems . getTokenMap) (assignments ++ argv)
+            starting = if hasExpansion then clearFiles facts else facts
+            assigned = foldl assignment starting assignments
+            args = drop 1 argv
+            name = getCommandName cmd
+        case argv of
+            [] -> return (assigned, FilenameSilent)
+            _ | Just function <- name, Just body <- Map.lookup function (filenameDefinitions facts) ->
+                if elem function calls || length calls >= 8 || not (affordable function)
+                then return (forget facts, FilenameUnknown)
+                else do
+                    let positional = S.fromList [show n | (n,arg) <- zip [1::Int ..] args, quotedScalar facts arg]
+                        local = assigned {filenameScalars = S.union positional
+                            (S.filter (not . all isDigit) $ filenameScalars assigned)}
+                    (_, output) <- execute (function:calls) local input body
+                    return (forget facts, output)
+              | maybe False (\n -> Map.member n definitions) name -> return (forget facts, FilenameUnknown)
+              | elem name (map Just ["local","typeset","declare","export","readonly"]) -> do
+                    let declarations = [t | t@T_Assignment{} <- args]
+                        next = foldl assignment assigned declarations
+                        bare = mapMaybe getLiteralString args
+                    return (next {filenameScalars = foldr S.delete (filenameScalars next) bare}, FilenameSilent)
+              | elem name (map Just [":","true","false"]) -> return (assigned, FilenameSilent)
+              | elem name (map Just ["eval",".","source","unset","alias","unalias"]) ->
+                    return ((forget facts) {filenameDefinitions = Map.empty}, FilenameUnknown)
+              | name == Just "printf" -> return (assigned, printfOutput assigned args)
+              | name == Just "read" -> do
+                    (after, output) <- readCommand assigned input cmd
+                    return (after {filenameEmptyIFS = filenameEmptyIFS facts}, output)
+              | elem name (map Just ["dirname","basename"]) -> do
+                    let parsed = getOpts (True, False) "za"
+                            [("zero",False),("multiple",False),("suffix",True)] args
+                        result = do
+                            options <- parsed
+                            let values = [word | ("",(_,word)) <- options]
+                                nul = any (\(flag,_) -> elem flag ["z","zero"]) options
+                            guard $ not (null values) && all (quotedScalar assigned) values
+                            return $ FilenameRecords $ if nul then FilenameNul else FilenameNewline
+                    return (assigned, fromMaybe FilenameUnknown result)
+              | name == Just "cat" && not (null args)
+                && all (\a -> maybe True (not . isPrefixOf "-") $ getLiteralString a) args -> do
+                    outputs <- mapM (fileInput calls assigned) args
+                    return (assigned, foldl append FilenameSilent outputs)
+              | otherwise -> do
+                    (actualInput, actualCommand) <- case fileOperands cmd of
+                        Just operands | not (null operands) -> do
+                            outputs <- mapM (\word -> if getLiteralString word == Just "-"
+                                then return input else fileInput calls assigned word) operands
+                            let ids = map getId operands
+                            return (foldl append FilenameSilent outputs,
+                                T_SimpleCommand (getId cmd) assignments $
+                                    filter (\word -> not $ elem (getId word) ids) argv)
+                        _ -> return (input, cmd)
+                    let classified = classifyFilenameCommand (toStream actualInput) actualCommand
+                    case classified of
+                        Just (bad, result) -> do
+                            when bad $ mismatch cmd
+                            let state = if elem name (map Just ["find","xargs"])
+                                    then clearFiles assigned else assigned
+                            return (state, if bad then FilenameUnknown else fromStream result)
+                        _ -> return (forget facts, FilenameUnknown)
+
+    isCommandExpansion T_DollarExpansion{} = True
+    isCommandExpansion T_Backticked{} = True
+    isCommandExpansion T_ProcSub{} = True
+    isCommandExpansion _ = False
+    fileOperands cmd = do
+        argv <- getCommandArgv cmd
+        parsed <- case getCommandName cmd of
+            Just "sort" -> getOpts (True, False) "zrunbfdisVk:t:S:T:cmCo:"
+                [("zero-terminated",False)] (drop 1 argv)
+            Just "uniq" -> getOpts (False, False) "zudif:s:w:c"
+                [("zero-terminated",False)] (drop 1 argv)
+            _ -> Nothing
+        let operands = [word | ("",(_,word)) <- parsed]
+        guard $ getCommandName cmd /= Just "uniq" || length operands <= 1
+        return operands
+
+    printfOutput facts args = case args of
+        format:values | not (null values) && all (quotedScalar facts) values ->
+            case getLiteralString format of
+                Just "%s\\0" -> FilenameRecords FilenameNul
+                Just "%s\\000" -> FilenameRecords FilenameNul
+                Just "%s\\n" -> FilenameRecords FilenameNewline
+                _ -> FilenameUnknown
+        _ -> FilenameUnknown
+
+    quotedScalar facts (T_NormalWord _ [word@T_DoubleQuoted{}]) = scalar facts word
+    quotedScalar facts word@T_DoubleQuoted{} = scalar facts word
+    quotedScalar _ _ = False
+    soleCommand (T_Pipeline _ [] [command]) = soleCommand command
+    soleCommand (T_Annotation _ _ command) = soleCommand command
+    soleCommand command = command
+
+    readShape cmd = do
+        argv <- getCommandArgv cmd
+        guard $ getCommandName cmd == Just "read"
+        parsed <- getOpts (False, False) "rd:" [] (drop 1 argv)
+        let flags = map fst parsed
+            names = [word | ("",(_,word)) <- parsed]
+            delimiters = [getLiteralString word | ("d",(_,word)) <- parsed]
+        name <- case names of [word] -> getLiteralString word; _ -> Nothing
+        guard $ isVariableName name
+        return (name, elem "r" flags, delimiters == [Just ""])
+    readCommand facts input cmd = case readShape cmd of
+        Nothing -> do
+            when (isJust $ toStream input) $ mismatch cmd
+            return (forget facts, FilenameSilent)
+        Just (name, raw, nul) -> do
+            let safe = input == FilenameRecords FilenameNul && raw && nul && filenameEmptyIFS facts
+            when (isJust (toStream input) && not safe) $ mismatch cmd
+            return ((clearFiles facts) { filenameScalars =
+                (if safe then S.insert else S.delete) name (filenameScalars facts)}, FilenameSilent)
+    readLoop calls facts input condition body =
+        case condition of
+            [test] | getCommandName (soleCommand test) == Just "read" -> do
+                let changesIFS = any modifiesIFS $ concatMap (Map.elems . getTokenMap) body
+                    start = (forget facts) {filenameEmptyIFS = filenameEmptyIFS facts && not changesIFS}
+                (loopFacts, _) <- execute calls start input test
+                (_, output) <- sequenceOf calls loopFacts FilenameUnknown body
+                return (forget facts, output)
+            _ -> do
+                void $ sequenceOf calls (forget facts) input condition
+                void $ sequenceOf calls (forget facts) FilenameUnknown body
+                return (forget facts, FilenameUnknown)
+      where
+        modifiesIFS (T_Assignment _ _ "IFS" _ _) = True
+        modifiesIFS _ = False
 
 indexOfSublists sub = f 0
   where

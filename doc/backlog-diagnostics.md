@@ -73,9 +73,10 @@ status is hidden by a pipeline/command substitution are outside this check.
 
 ## SC2353: check-filename-streams
 
-An opt-in, pipeline-local analysis tracks whether known filename-producing
-commands emit NUL or newline records. It checks the expectations of subsequent
-supported stages, not just whether a pipeline contains `-0` somewhere.
+An opt-in analysis tracks whether known filename-producing commands emit NUL
+or newline records. It follows supported pipelines, saved streams, substitutions,
+read loops and statically known function wrappers, not just whether a pipeline
+contains `-0` somewhere.
 
 For example, `find . -print0 | xargs -0 dirname | sort` loses the NUL convention
 when ordinary dirname writes its output. The warning points at sort, where
@@ -90,15 +91,40 @@ dirname/basename. Predicate operands are distinguished from find actions.
 Known GNU-style NUL flags are modelled, including dirname/basename -z. A
 legacy SC2038 warning is not duplicated for the same simple find/xargs pair.
 
-Known shell-function overrides, unknown commands/options, mixed find output
-modes, redirections and stderr
-pipes break tracking. Numeric find output, grep counts, independent file input,
-and unknown xargs child output are not assumed to carry filename records.
-One report stops the affected stream to avoid cascades. No warning means
-only that no supported unsafe connection was established, NOT that arbitrary
-filenames are proved safe throughout the program.
+The supported connections include:
 
-This does not yet track streams through variables, temporary files, functions,
-read loops or command substitutions. Nor does selecting an IRIX shell imply
-that installed utilities support GNU NUL options. Advice is capability-neutral
-and has no automatic rewrite. Existing defaults and other checks are unchanged.
+- Saved streams, for example `find . -print0 > list; sort < list`, and reads
+  via cat/sort/uniq operands. Exact literal paths or the same unchanged simple
+  path variable identify a saved stream. Truncation overwrites prior facts;
+  append/descriptor tricks, unknown commands, directory changes and variable
+  mutations invalidate them. Branches retain only shared facts. This is not
+  filesystem alias, symlink, concurrent-writer or successful-I/O proof.
+- Command substitution of known filename records, including backticks, warns
+  at capture: shell variables/command substitution cannot preserve arbitrary
+  NUL-separated records or trailing newlines. Unrelated text captures do not
+  warn. Process substitution carries a stream without storing it in a variable.
+- Simple `while IFS= read -r -d '' name` loops consume NUL records without
+  splitting or escape interpretation. The variable and simple scalar copies
+  can feed quoted printf arguments: `%s\0` preserves records; `%s\n`
+  reintroduces newline ambiguity. A newline reader, unknown/nonempty IFS or
+  missing `-r` is not an arbitrary-filename reader. Existing portability
+  diagnostics still govern shell/utility feature availability.
+  Glob-based for loops also introduce individual filename values; direct
+  dirname/basename calls on quoted known filenames model their output delimiter.
+- Uniquely defined, available, nonrecursive shell functions can produce/filter
+  streams or receive known filename arguments. Local facts do not leak out;
+  analysis is bounded to eight nested calls and 1,000 expanded AST nodes per
+  wrapper. Unknown/redefined/dynamic functions
+  lose facts. Uncalled bodies are checked without invented caller input.
+
+Unknown commands/options, mixed output, unsupported control structures,
+redirections and stderr pipes break tracking. Numeric find output, grep counts
+and unknown xargs child output are not assumed to carry filename records.
+One report stops the affected stream to avoid cascades; the existing simple
+SC2038 warning is not duplicated. Silence is NOT arbitrary-filename safety
+proof. Arbitrary eval/source strings, filesystem aliases, descriptor graphs
+and recursive programs are not solved by this bounded static analysis.
+
+Selecting an IRIX shell does not imply GNU NUL utility support. Advice is
+capability-neutral, with no automatic rewrite. Existing defaults and shared
+analyses used by other diagnostics are unchanged.

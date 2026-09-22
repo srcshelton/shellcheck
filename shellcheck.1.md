@@ -99,7 +99,8 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     enabled by default, including under the IRIX profiles. See
     `doc/backlog-diagnostics.md` for exact boundaries and examples.
     *check-filename-streams* (SC2353) tracks filename delimiters through known
-    pipeline stages. Unknown commands/options terminate tracking; silence is
+    pipelines, saved streams, substitutions, read loops and bounded static
+    function calls. Unknown commands/options terminate tracking; silence is
     not proof of arbitrary-filename safety. This check is also opt-in.
 
 **-P**\ *SOURCEPATH*,\ **--source-path=***SOURCEPATH*
