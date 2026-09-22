@@ -2587,6 +2587,11 @@ prop_readIfClause4 = isWarning readIfClause "if false; then true; else if true; 
 prop_readIfClause5 = isOk readIfClause "if false; then true; else\nif true; then echo lol; fi; fi"
 prop_readIfClause6 = isWarning readIfClause "if true\nthen\nDo the thing\nfi"
 prop_readIfClauseIrixElseIf = isOk readScript "# shellcheck shell=irix-sh\nif false; then true; else if true; then echo nested; fi; fi\n"
+prop_readIfClauseIrixKshThen = isOk readScript "# shellcheck shell=irix-ksh\nif [[ x = x ]] then\n :\nfi\n"
+prop_readIfClauseIrixKshElifThen = isOk readScript "# shellcheck shell=irix-ksh\nif false; then :; elif [[ x = x ]] then :; fi\n"
+prop_readIfClauseKshThen = isWarning readScript "# shellcheck shell=ksh\nif [[ x = x ]] then\n :\nfi\n"
+prop_readIfClauseIrixShThen = isWarning readScript "# shellcheck shell=irix-sh\nif [[ x = x ]] then\n :\nfi\n"
+prop_readIfClauseIrixKshSingleThen = isWarning readScript "# shellcheck shell=irix-ksh\nif [ x = x ] then\n :\nfi\n"
 readIfClause = called "if expression" $ do
     start <- startSpan
     pos <- getPosition
@@ -3029,9 +3034,18 @@ readConditionCommand = do
         parseProblemAtWithEnd pos posEnd ErrorC 1139 $
             "Use " ++ alt c ++ " instead of '" ++ c ++ "' between test commands."
 
-    -- If the next word is a keyword, readNormalWord will trigger a warning
+    -- IRIX ksh accepts an unredirected [[ .. ]] immediately before 'then'.
+    -- The enclosing if/elif parser still consumes the keyword and validates
+    -- the grammar; only avoid the speculative word reader's false SC1010.
+    irixThen <- case (cmd, redirs) of
+        (T_ConditionWithClosing _ DoubleBracket DoubleBracket _, []) -> do
+            irixKsh <- (== Just IrixKsh) <$> getAnnotatedShell
+            if irixKsh then isFollowedBy g_Then else return False
+        _ -> return False
+
+    -- Other keyword/word positions keep the existing warning/recovery path.
     hasKeyword <- isFollowedBy readKeyword
-    hasWord <- isFollowedBy readNormalWord
+    hasWord <- if irixThen then return False else isFollowedBy readNormalWord
 
     when (hasWord && not (hasKeyword || hasDashAo)) $ do
         -- We have other words following, and no error has been emitted.

@@ -1,0 +1,54 @@
+#!/usr/bin/env python3
+"""IRIX ksh-only unseparated double-bracket/then parser contracts."""
+import json
+import subprocess
+import sys
+
+binary = sys.argv[1]
+checks = 0
+
+def codes(source, *options):
+    global checks
+    result = subprocess.run([binary, "--norc", "--format=json1", *options, "-"],
+                            input=source, text=True, capture_output=True)
+    assert result.returncode in (0, 1), (result.returncode, result.stderr)
+    assert not result.stderr, result.stderr
+    checks += 1
+    return {comment["code"] for comment in json.loads(result.stdout)["comments"]}
+
+minimal = "if [[ x = x ]] then\n :\nfi\n"
+variable = 'if [[ "$1" = x ]] then\n :\nfi\n'
+for fixture in (minimal, variable,
+                'if [[ "$1" = x ]] then :; else :; fi',
+                'if false; then :; elif [[ "$1" = x ]] then :; fi',
+                'if true && [[ "$1" = x ]] then :; fi',
+                'if ! [[ "$1" = x ]] then :; fi'):
+    assert 1010 not in codes(fixture, "--shell=irix-ksh"), fixture
+
+for shell in ("bash", "ksh", "sh", "dash", "busybox", "irix-sh", "irix-bsh", "irix-jsh"):
+    assert 1010 in codes(variable, "--shell=" + shell), shell
+
+assert 1010 not in codes("# shellcheck shell=irix-ksh\n" + variable)
+assert 1010 in codes("# shellcheck shell=irix-ksh\n" + variable, "--shell=ksh")
+assert 1010 not in codes("#!/bin/sh\n" + variable, "--sh-variant=irix-ksh")
+assert 1010 in codes("#!/bin/sh\n" + variable, "--sh-variant=irix-ksh", "--shell=sh")
+
+for fixture in ('if [ "$1" = x ] then :; fi',
+                'if true then :; fi',
+                'while [[ "$1" = x ]] do :; done',
+                'if [[ "$1" = x ]] > /dev/null then :; fi'):
+    assert 1010 in codes(fixture, "--shell=irix-ksh"), fixture
+
+# Keyword boundaries, matching brackets and the surrounding grammar still
+# matter; this is not a global suppression of SC1010 or other parse errors.
+assert 1140 in codes('if [[ "$1" = x ]] thenx; then :; fi', "--shell=irix-ksh")
+assert 1140 in codes('if [[ "$1" = x ]] "then"; then :; fi', "--shell=irix-ksh")
+assert 1033 in codes('if [[ "$1" = x ] then :; fi', "--shell=irix-ksh")
+assert codes('[[ "$1" = x ]] then :; fi', "--shell=irix-ksh") & {1089, 1072, 1073}
+assert 2086 in codes('if [[ "$1" = x ]] then echo $1; fi', "--shell=irix-ksh")
+
+for shell in ("irix-ksh", "ksh", "bash", "irix-sh"):
+    assert 1010 not in codes('if [[ "$1" = x ]]; then :; fi', "--shell=" + shell)
+    assert 1010 not in codes('if [[ "$1" = x ]]\nthen :; fi', "--shell=" + shell)
+
+print(f"PASS {checks} IRIX ksh then parser/profile contracts")

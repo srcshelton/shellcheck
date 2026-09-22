@@ -26,6 +26,8 @@
   profiles; native shells require `base#digits`, such as `16#1a`.
 
 ### Fixed
+- The `irix-ksh` parser accepts `if [[ condition ]] then` (and the corresponding
+  `elif` form) without a false SC1010; other profiles retain the warning.
 - SC3068/SC3070 recognize a preceding effective `_XPG=1` in `irix-sh`,
   respecting control flow, variable resets, function calls and subshell scope.
   The `irix-bsh`/`irix-jsh` restrictions remain unchanged.

@@ -150,6 +150,10 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     arithmetic even though normal execution succeeds. Such noexec failures
     alone are not evidence of an invalid script.
 
+    The *irix-ksh* profile also accepts an unredirected `[[ condition ]]`
+    immediately followed by **then** in an **if** or **elif** clause, without
+    a semicolon or newline. Other profiles retain SC1010 for this form.
+
     Both IRIX shells require `base#digits` for hexadecimal arithmetic constants
     (for example, `16#1a` rather than `0x1a`). SC3071 diagnoses literal C-style
     hexadecimal constants in arithmetic contexts, not ordinary string values.
