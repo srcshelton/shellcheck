@@ -125,6 +125,8 @@ data CFEffect =
     | CFWritePrefix String CFValue
     | CFReadNounset
     | CFReadIFS
+    -- Implicit mode dependency, not an explicit potentially-unset expansion.
+    | CFReadIrixXpg
     | CFSetNounset Bool
     | CFDefineFunction String Id Node Node
     | CFUndefine String
@@ -482,6 +484,18 @@ shebangEnablesNounset shebang = fromMaybe False $ do
         "-" `isPrefixOf` flag && not ("--" `isPrefixOf` flag) && 'u' `elem` drop 1 flag
 
 -- Build the CFG.
+-- Like the implicit IFS dependency, this preserves the caller's mode in
+-- cached function/subshell analyses without inventing a user variable read.
+-- Other dialects retain their original graphs.
+withIrixXpg id body = do
+    shell <- reader $ cfShell . cfParameters
+    if shell == IrixSh
+        then do
+            mode <- newNodeRange $ applySingle $ IdTagged id CFReadIrixXpg
+            result <- body
+            linkRange mode result
+        else body
+
 build :: Token -> CFM Range
 build t = do
     range <- under (getId t) $ build' t
@@ -757,7 +771,7 @@ build t = do
             status <- newNodeRange $ CFSetExitCode id
             linkRanges [start, child, status]
 
-        T_DollarArithmetic id arith -> do
+        T_DollarArithmetic id arith -> withIrixXpg id $ do
             value <- build arith
             ifs <- newNodeRange $ applySingle $ IdTagged id CFReadIFS
             linkRanges [value, ifs]
@@ -793,7 +807,7 @@ build t = do
         T_DoubleQuoted _ list -> sequentially list
 
         T_DollarExpansion id body ->
-            subshell id "$(..) expansion" $ sequentially body
+            withIrixXpg id $ subshell id "$(..) expansion" $ sequentially body
 
         T_Extglob _ _ list -> sequentially list
 

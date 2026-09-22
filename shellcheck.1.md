@@ -129,10 +129,26 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     *irix-sh* models IRIX `/sbin/sh`; *irix-ksh* models the same IRIX shell
     executable when invoked in Korn-shell mode.
 
-    IRIX sh does not evaluate `$(command)` or `$((expression))` expansions
-    (SC3068 and SC3070). Use legacy backticks for command substitution, and
-    **let** or a `(( expression ))` command to perform arithmetic before
-    expanding the result variable. IRIX ksh supports both expansion forms.
+    Default IRIX sh does not evaluate `$(command)` or `$((expression))`
+    expansions (SC3068 and SC3070). The documented `_XPG=1` mode enables
+    both. With extended analysis enabled, ShellCheck recognizes this mode
+    where control flow proves that `_XPG` has the value `1`; later,
+    conditional-only or subshell-local assignments do not enable it globally.
+    Unknown values and disabled extended analysis retain the default checks.
+    This uses the same static variable tracking as other dataflow checks;
+    effects of arbitrary `eval`, unparsed sourced files and unknown runtime
+    callers are not inferred. Source relevant files for analysis explicitly.
+    Other values accepted by particular IRIX versions are not assumed portable.
+    `_XPG` is a shell-wide compatibility mode with other effects (including
+    tilde expansion and `echo -n`), not a per-expression syntax toggle.
+    Alternatively, use legacy backticks for command substitution, and **let**
+    or a `(( expression ))` command before expanding the result variable.
+    IRIX ksh supports both expansion forms without `_XPG`; setting this
+    variable does not enable them in `irix-bsh` or `irix-jsh`.
+
+    Native IRIX `ksh -n` may reject command substitutions embedded in
+    arithmetic even though normal execution succeeds. Such noexec failures
+    alone are not evidence of an invalid script.
 
     Both IRIX shells require `base#digits` for hexadecimal arithmetic constants
     (for example, `16#1a` rather than `0x1a`). SC3071 diagnoses literal C-style

@@ -26,6 +26,9 @@
   profiles; native shells require `base#digits`, such as `16#1a`.
 
 ### Fixed
+- SC3068/SC3070 recognize a preceding effective `_XPG=1` in `irix-sh`,
+  respecting control flow, variable resets, function calls and subshell scope.
+  The `irix-bsh`/`irix-jsh` restrictions remain unchanged.
 - SC2118 explains Ksh coprocess semantics rather than claiming `|&` is
   unsupported (#3524).
 - SC2155 detects command substitutions nested in parameter-expansion words,

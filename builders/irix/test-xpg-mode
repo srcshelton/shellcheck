@@ -1,0 +1,71 @@
+#!/usr/bin/env python3
+"""IRIX _XPG flow and noexec-parser regression contracts."""
+import json
+import subprocess
+import sys
+
+binary = sys.argv[1]
+checks = 0
+
+def codes(source, shell="irix-sh", *extra):
+    global checks
+    run = subprocess.run(
+        [binary, "--norc", "--format=json1", "--shell=" + shell, *extra, "-"],
+        input=source, text=True, capture_output=True)
+    assert run.returncode in (0, 1), (source, run.returncode, run.stderr)
+    assert not run.stderr, (source, run.stderr)
+    checks += 1
+    return {item["code"] for item in json.loads(run.stdout)["comments"]}
+
+for expression, diagnostic in (("$(printf yes)", 3068), ("$((3+2))", 3070)):
+    use = 'value=' + expression + '; printf "%s\\n" "$value"'
+    for prefix in (
+        "_XPG=1; ", "export _XPG=1; ", "mode=1; _XPG=$mode; ",
+        'if test -n "$1"; then _XPG=1; else _XPG=1; fi; ',
+        "_XPG=1 ",
+    ):
+        assert diagnostic not in codes(prefix + use), (prefix, expression)
+    for prefix in (
+        "", "_XPG=0; ", "_XPG=; ", "_XPG=01; ",
+        "_XPG=1; _XPG=0; ", "_XPG=1; unset _XPG; ",
+        "_XPG=1; read -r _XPG; ", "_XPG=1 true; ",
+        "(_XPG=1); ", 'if test -n "$1"; then _XPG=1; fi; ',
+        "f() { _XPG=1; }; ",
+    ):
+        assert diagnostic in codes(prefix + use), (prefix, expression)
+    assert diagnostic not in codes("(_XPG=1; " + use + ")")
+    assert diagnostic not in codes("f() { " + use + "; }; _XPG=1; f")
+    assert diagnostic in codes("f() { " + use + "; }; _XPG=1; f; _XPG=0; f")
+    assert diagnostic not in codes("enable() { _XPG=1; }; enable; " + use)
+    assert diagnostic in codes("disable() { _XPG=0; }; _XPG=1; disable; " + use)
+    assert diagnostic in codes("disable() { unset _XPG; }; _XPG=1; disable; " + use)
+    assert diagnostic in codes('_XPG=1; _XPG="$1"; ' + use)
+    assert diagnostic in codes('if test -n "$1"; then _XPG=1; else _XPG=0; fi; ' + use)
+    assert diagnostic in codes(use + "; _XPG=1")
+    assert diagnostic in codes("_XPG=1; " + use, "irix-sh", "--extended-analysis=false")
+    assert diagnostic not in codes(use, "irix-sh", "--exclude=" + str(diagnostic))
+    assert diagnostic not in codes("# shellcheck disable=" + str(diagnostic) + "\n" + use)
+    for shell in ("sh", "dash", "bash", "ksh", "irix-ksh"):
+        assert diagnostic not in codes(use, shell)
+
+# An implicit mode dependency is not a user variable read: do not invent
+# an unset-variable warning or suppress the real diagnostics in the command.
+assert 2154 not in codes("set -u; value=$(printf yes)")
+assert 2154 in codes('_XPG=1; value=$(printf "%s" "$unknown_variable")')
+assert 2086 in codes('_XPG=1; value=$(printf "%s" $1)')
+
+for shell in ("irix-bsh", "irix-jsh"):
+    assert 3072 in codes("_XPG=1; value=$(printf yes)", shell)
+    assert 3073 in codes("_XPG=1; value=$((3+2))", shell)
+
+# IRIX ksh -n's rejection is not a runtime syntax failure. Neither form may
+# acquire an error merely because noexec omits substitution during arithmetic.
+for substitution in ("`printf 1`", "$(printf 1)"):
+    source = "value=$((5 - " + substitution + ')); printf "%s\\n" "$value"'
+    run = subprocess.run(
+        [binary, "--norc", "--format=json1", "--severity=error", "--shell=irix-ksh", "-"],
+        input=source, text=True, capture_output=True)
+    checks += 1
+    assert run.returncode == 0, (source, run.stdout, run.stderr)
+
+print(f"PASS {checks} IRIX _XPG flow/profile and arithmetic noexec contracts")

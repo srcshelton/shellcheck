@@ -28,6 +28,7 @@ import ShellCheck.AnalyzerLib
 import ShellCheck.Interface
 import ShellCheck.Prelude
 import ShellCheck.Regex
+import qualified ShellCheck.CFGAnalysis as CF
 
 import Control.Monad
 import Control.Monad.RWS
@@ -91,10 +92,25 @@ checkForDecimals = ForShell [Sh, Dash, BusyboxSh, Bash] f
 
 prop_checkIrixCommandSubstitution1 = verify checkIrixCommandSubstitution "value=$(echo hi)"
 prop_checkIrixCommandSubstitution2 = verifyNot checkIrixCommandSubstitution "value=`echo hi`"
+prop_checkIrixCommandSubstitution3 = verifyNot checkIrixCommandSubstitution "_XPG=1; value=$(echo hi)"
+prop_checkIrixCommandSubstitution4 = verifyNot checkIrixCommandSubstitution "export _XPG=1; value=$(echo hi)"
+prop_checkIrixCommandSubstitution5 = verify checkIrixCommandSubstitution "_XPG=1; _XPG=0; value=$(echo hi)"
+prop_checkIrixCommandSubstitution6 = verify checkIrixCommandSubstitution "_XPG=1; unset _XPG; value=$(echo hi)"
+prop_checkIrixCommandSubstitution7 = verify checkIrixCommandSubstitution "if test -n \"$1\"; then _XPG=1; fi; value=$(echo hi)"
+prop_checkIrixCommandSubstitution8 = verifyNot checkIrixCommandSubstitution "if test -n \"$1\"; then _XPG=1; else _XPG=1; fi; value=$(echo hi)"
+prop_checkIrixCommandSubstitution9 = verify checkIrixCommandSubstitution "(_XPG=1); value=$(echo hi)"
+prop_checkIrixCommandSubstitution10 = verifyNot checkIrixCommandSubstitution "(_XPG=1; value=$(echo hi))"
+prop_checkIrixCommandSubstitution11 = verify checkIrixCommandSubstitution "_XPG=1 true; value=$(echo hi)"
+prop_checkIrixCommandSubstitution12 = verifyNot checkIrixCommandSubstitution "_XPG=1 value=$(echo hi)"
+prop_checkIrixCommandSubstitution13 = verifyNot checkIrixCommandSubstitution "# shellcheck shell=irix-sh\nf() { value=$(echo hi); }; _XPG=1; f"
+prop_checkIrixCommandSubstitution14 = verify checkIrixCommandSubstitution "f() { _XPG=1; }; value=$(echo hi)"
+prop_checkIrixCommandSubstitution15 = verify checkIrixCommandSubstitution "_XPG=1; read _XPG; value=$(echo hi)"
 checkIrixCommandSubstitution = ForShell [IrixSh] f
   where
-    f (T_DollarExpansion id _) =
-        err id 3068 "In IRIX sh, $(..) is not command substitution. Use legacy backticks."
+    f (T_DollarExpansion id _) = do
+        xpg <- irixXpgEnabledAt id
+        unless xpg $
+            err id 3068 "In default IRIX sh, $(..) is not command substitution. Use legacy backticks or enable _XPG=1 first."
     f _ = return ()
 
 
@@ -103,11 +119,27 @@ prop_checkIrixArithmeticExpansion2 = verify checkIrixArithmeticExpansion "value=
 prop_checkIrixArithmeticExpansion3 = verifyNot checkIrixArithmeticExpansion "let \"value = value + 1\""
 prop_checkIrixArithmeticExpansion4 = verifyNot checkIrixArithmeticExpansion "((value = value + 1))"
 prop_checkIrixArithmeticExpansion5 = verifyNot checkIrixArithmeticExpansion "echo '$((value + 1))'"
+prop_checkIrixArithmeticExpansion6 = verifyNot checkIrixArithmeticExpansion "_XPG=1; value=$((value + 1))"
+prop_checkIrixArithmeticExpansion7 = verify checkIrixArithmeticExpansion "_XPG=1; _XPG=0; value=$((value + 1))"
+prop_checkIrixArithmeticExpansion8 = verify checkIrixArithmeticExpansion "_XPG=1; unset _XPG; value=$((value + 1))"
 checkIrixArithmeticExpansion = ForShell [IrixSh] f
   where
-    f (T_DollarArithmetic id _) =
-        err id 3070 "IRIX sh does not evaluate $((..)). Use let or ((..)) to assign a result, then expand the variable."
+    f (T_DollarArithmetic id _) = do
+        xpg <- irixXpgEnabledAt id
+        unless xpg $
+            err id 3070 "Default IRIX sh does not evaluate $((..)). Enable _XPG=1 first, or use let or ((..)) and expand the result."
     f _ = return ()
+
+-- Scope and execution order matter: a later, conditional or child-shell
+-- assignment must not enable expansions everywhere in the script. The CFG
+-- exports only proof of the documented literal value, not its private
+-- debugging-only literal lattice. Without extended analysis keep the check.
+irixXpgEnabledAt id = do
+    params <- ask
+    return $ fromMaybe False $ do
+        analysis <- cfgAnalysis params
+        state <- CF.getIncomingState analysis id
+        return $ CF.irixXpgEnabled state
 
 
 prop_checkIrixHexArithmetic1 = verify checkIrixHexArithmetic "let 'number = 0x1a'"

@@ -119,6 +119,8 @@ data ProgramState = ProgramState {
     nounsetState :: Maybe Bool,
     variablesMaySplitOnIFS :: S.Set String,
     integerValuesMaySplitOnIFS :: Bool,
+    -- Proof of the documented IRIX sh mode, not a general variable-value API.
+    irixXpgEnabled :: Bool,
     exitCodes :: S.Set Id,
     stateIsReachable :: Bool
 } deriving (Show, Eq, Generic, NFData)
@@ -135,6 +137,10 @@ internalToExternal s =
         variablesMaySplitOnIFS = M.keysSet $ M.filter maySplitOnIFS flatVars,
         integerValuesMaySplitOnIFS =
             maybe True (any (`elem` "-0123456789")) ifsLiteral,
+        irixXpgEnabled = case M.lookup "_XPG" flatVars of
+            Just value -> not (variableMayBeUnsetState value)
+                && literalValue (variableValue value) == Just "1"
+            Nothing -> False,
         -- internalState = s, -- For debugging
         exitCodes = fromMaybe S.empty $ sExitCodes s,
         stateIsReachable = fromMaybe True $ sIsReachable s
@@ -1213,6 +1219,7 @@ transferEffect ctx effect =
                 _ -> void $ readVariable ctx name
         CFReadNounset -> void $ readNounset ctx
         CFReadIFS -> void $ readVariable ctx "IFS"
+        CFReadIrixXpg -> void $ readVariable ctx "_XPG"
         CFWriteVariable name value -> do
             val <- cfValueToVariableValue ctx value
             updateVariableValue ctx name val
