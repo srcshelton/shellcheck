@@ -34,7 +34,7 @@ cases = [
     ("sort() { cat; }; find . -print0 | sort", 0),
 ]
 count = 0
-for shell in ("sh", "bash", "ksh", "irix-sh", "irix-ksh", "irix-bsh", "irix-jsh"):
+for shell in ("sh", "bash", "ksh", "irix-sh", "irix-ksh", "irix-dtksh", "irix-bsh", "irix-jsh"):
     for source, expected in cases:
         for enabled in (False, True):
             options = ["--enable=check-filename-streams"] if enabled else []

@@ -190,6 +190,8 @@ shellForExecutable name =
         "irix-jsh" -> return IrixBsh
         "irix-sh" -> return IrixSh
         "irix-ksh" -> return IrixKsh
+        "dtksh" -> return IrixDtksh
+        "irix-dtksh" -> return IrixDtksh
         _ -> Nothing
 
 shellName :: Shell -> String
@@ -203,10 +205,12 @@ shellName shell =
         IrixBsh -> "irix-bsh"
         IrixSh -> "irix-sh"
         IrixKsh -> "irix-ksh"
+        IrixDtksh -> "irix-dtksh"
 
 isIrixPlatformShell IrixBsh = True
 isIrixPlatformShell IrixSh = True
 isIrixPlatformShell IrixKsh = True
+isIrixPlatformShell IrixDtksh = True
 isIrixPlatformShell _ = False
 
 -- bsh/jsh share the Bourne language, not the /sbin/sh Korn parser.
@@ -220,6 +224,7 @@ supportsDollarCommandSubstitution _ = True
 
 isKshShell Ksh = True
 isKshShell IrixKsh = True
+isKshShell IrixDtksh = True
 isKshShell _ = False
 
 flagsForRead = "sreu:n:N:i:p:a:t:"
@@ -228,6 +233,9 @@ flagsForRead = "sreu:n:N:i:p:a:t:"
 flagsForReadFor IrixBsh = ""
 flagsForReadFor IrixSh = "sreu:n:N:i:pa:t:"
 flagsForReadFor IrixKsh = "sreu:n:N:i:pa:t:"
+-- CDE 5.3.5 dtksh (ksh93 M-12/28/93d): read [-Aprs] [-d delim]
+-- [-t timeout] [-u filenum] [name...].
+flagsForReadFor IrixDtksh = "Aprsd:t:u:"
 flagsForReadFor _ = flagsForRead
 
 flagsForMapfile = "d:n:O:s:u:C:c:t"

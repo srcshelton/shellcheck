@@ -152,7 +152,7 @@ prop_checkIrixHexArithmetic7 = verify checkIrixHexArithmetic "word=1a; let \"num
 prop_checkIrixHexArithmetic8 = verify checkIrixHexArithmetic "echo ${values[0X1A]}"
 prop_checkIrixHexArithmetic9 = verifyNot checkIrixHexArithmetic "echo ${values[16#1a]}"
 prop_checkIrixHexArithmetic10 = verifyNot checkIrixHexArithmetic "echo ${value:-0x1a}"
-checkIrixHexArithmetic = ForShell [IrixSh, IrixKsh] f
+checkIrixHexArithmetic = ForShell [IrixSh, IrixKsh, IrixDtksh] f
   where
     f t@(TA_Expansion id _)
         | cStylePrefix $ getLiteralStringDef "\0" t = unsupported id
@@ -170,7 +170,7 @@ checkIrixHexArithmetic = ForShell [IrixSh, IrixKsh] f
     f _ = return ()
     cStylePrefix value = any (`isPrefixOf` value) ["0x", "0X"]
     unsupported id =
-        err id 3071 "IRIX sh/ksh do not support C-style hexadecimal arithmetic constants. Use base#digits, e.g. 16#1a instead of 0x1a."
+        err id 3071 "IRIX sh/ksh/dtksh do not support C-style hexadecimal arithmetic constants. Use base#digits, e.g. 16#1a instead of 0x1a."
 
 
 prop_checkBashisms = verify checkBashisms "while read a; do :; done < <(a)"
@@ -336,7 +336,21 @@ prop_checkBashismsIrixKshReplacement = verify checkBashisms
     "# shellcheck shell=irix-ksh\nx=value\necho \"${x//a/b}\""
 prop_checkBashismsIrixKshSupported = verifyNot checkBashisms
     "# shellcheck shell=irix-ksh\nx=$(echo value)\necho \"$((1 + 1)) ${#x}\"\n(( x = 1 ))\nlet x=x+1\n[[ -n $x ]]\nread -r x"
-checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixBsh, IrixKsh] $ \t -> do
+prop_checkBashismsIrixDtkshSupported = verifyNot checkBashisms
+    "# shellcheck shell=irix-dtksh\nx=abcabc\ntypeset -A map\nmap[key]=value\ntypeset -n ref=x\nprint \"${x//ab/X} ${x:1:2} ${map[key]} $ref\"\n[[ $x = +(a|b|c)* ]]"
+prop_checkBashismsIrixDtkshProcessSubstitution = verify checkBashisms
+    "# shellcheck shell=irix-dtksh\ncat <(print value)"
+prop_checkBashismsIrixDtkshHereString = verify checkBashisms
+    "# shellcheck shell=irix-dtksh\nread value <<< text"
+prop_checkBashismsIrixDtkshRegex = verify checkBashisms
+    "# shellcheck shell=irix-dtksh\n[[ value =~ val.* ]]"
+prop_checkBashismsIrixDtkshBraceExpansion = verify checkBashisms
+    "# shellcheck shell=irix-dtksh\nprint {1..3}"
+prop_checkBashismsIrixDtkshCompoundVariable = verify checkBashisms
+    "# shellcheck shell=irix-dtksh\ntypeset -C value=(field=text)"
+prop_checkBashismsIrixDtkshPipefail = verify checkBashisms
+    "# shellcheck shell=irix-dtksh\nset -o pipefail"
+checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixBsh, IrixKsh, IrixDtksh] $ \t -> do
     params <- ask
     kludge params t
  where
@@ -346,10 +360,13 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixBsh, IrixKsh] $ \t -> do
     isBusyboxSh = shellType params == BusyboxSh
     isDash = shellType params == Dash || isBusyboxSh
     isIrixKsh = shellType params == IrixKsh
+    isIrixDtksh = shellType params == IrixDtksh
     isIrixBsh = shellType params == IrixBsh
     warnMsg id code s =
         if isIrixKsh
         then err id code $ "In IRIX ksh, " ++ s ++ " not supported."
+        else if isIrixDtksh
+        then err id code $ "In IRIX dtksh, " ++ s ++ " not supported."
         else if isIrixBsh
         then err id code $ "In IRIX bsh/jsh, " ++ s ++ " not supported."
         else if isDash
@@ -358,6 +375,7 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixBsh, IrixKsh] $ \t -> do
     asStr = getLiteralString
 
     bashism t | isIrixKsh = irixKshism t
+    bashism t | isIrixDtksh = irixDtkshism t
     bashism (T_SimpleCommand id _ ((asStr -> Just "command"):_)) | isIrixBsh =
         warnMsg id 3044 "'command' is"
     bashism (T_DollarExpansion id _) | isIrixBsh =
@@ -617,6 +635,30 @@ checkBashisms = ForShell [Sh, Dash, BusyboxSh, IrixBsh, IrixKsh] $ \t -> do
             when (isJust $ matchRegex regex str) $ warnMsg id code feature
     irixKshism _ = return ()
 
+    -- SGI CDE 5.3.5 dtksh embeds ksh93 M-12/28/93d.  It is substantially
+    -- newer than IRIX /sbin/ksh, but predates several constructs accepted by
+    -- current ksh implementations.  These exclusions are native-probe backed.
+    irixDtkshism (T_ProcSub id _ _) =
+        warnMsg id 3001 "process substitution is"
+    irixDtkshism (T_HereString id _) =
+        warnMsg id 3011 "here-strings are"
+    irixDtkshism (T_BraceExpansion id _) =
+        warnMsg id 3009 "brace expansion is"
+    irixDtkshism (TC_Binary id _ "=~" _ _) =
+        warnMsg id 3015 "=~ regex matching is"
+    irixDtkshism (T_SimpleCommand id _ [asStr -> Just "test", _, asStr -> Just "=~", _]) =
+        warnMsg id 3015 "=~ regex matching is"
+    irixDtkshism t@(T_SimpleCommand _ _ _)
+        | t `isCommand` "typeset" =
+            forM_ (getLeadingFlags t) $ \(word, flag) ->
+                when (flag == "C") $
+                    warnMsg (getId word) 3045 "typeset -C compound variables are"
+    irixDtkshism t@(T_SimpleCommand id _ _)
+        | t `isCommand` "set"
+        , any (`isInfixOf` drop 1 (oversimplify t)) [["-o", "pipefail"], ["+o", "pipefail"]] =
+            warnMsg id 3040 "set option pipefail is"
+    irixDtkshism _ = return ()
+
     varChars="_0-9a-zA-Z"
     advancedExpansions = let re = mkRegex in [
         (re $ "^![" ++ varChars ++ "]", 3053, "indirect expansion is"),
@@ -709,7 +751,7 @@ prop_checkEchoSed1 = verify checkEchoSed "FOO=$(echo \"$cow\" | sed 's/foo/bar/g
 prop_checkEchoSed1b = verify checkEchoSed "FOO=$(sed 's/foo/bar/g' <<< \"$cow\")"
 prop_checkEchoSed2 = verify checkEchoSed "rm $(echo $cow | sed -e 's,foo,bar,')"
 prop_checkEchoSed2b = verify checkEchoSed "rm $(sed -e 's,foo,bar,' <<< $cow)"
-checkEchoSed = ForShell [Bash, Ksh] f
+checkEchoSed = ForShell [Bash, Ksh, IrixDtksh] f
   where
     f (T_Redirecting id lefts r) =
         when (any redirectHereString lefts) $

@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""CLI contracts for the SGI CDE 5.3.5 dtksh language profile."""
+import json
+import subprocess
+import sys
+
+binary = sys.argv[1]
+checks = 0
+
+
+def codes(source, *options):
+    global checks
+    result = subprocess.run(
+        [binary, "--norc", "--format=json1", *options, "-"],
+        input=source, text=True, capture_output=True, check=False)
+    assert result.returncode in (0, 1), (result.returncode, result.stderr)
+    assert not result.stderr, result.stderr
+    checks += 1
+    return {comment["code"] for comment in json.loads(result.stdout)["comments"]}
+
+
+dialect = ("--shell=irix-dtksh",)
+
+# Capabilities observed in the exact cde.sw.eoe 5.3.5 executable, whose
+# embedded shell identifies itself as ksh93 Version M-12/28/93d.
+supported = r'''value=abcabc
+typeset -A map
+map[key]=value
+typeset -n ref=value
+typeset -F amount=1.5
+print -r -- "${value//ab/X} ${value:1:2} ${map[key]} $ref $amount"
+[[ $value = +(a|b|c)* ]]
+integer number=16#ff
+print -r -- $'quoted\tvalue'
+'''
+assert not {3001, 3002, 3003, 3009, 3010, 3011, 3015, 3040, 3045,
+            3052, 3054, 3057, 3060, 3071} & codes(supported, *dialect)
+assert 2162 in codes("read value", *dialect)
+assert not {2162, 3045} & codes("read -r -d : -t 1 -u 3 value", *dialect)
+
+# Newer ksh93 features that the SGI executable rejects.
+unsupported = (
+    ("cat <(print value)", 3001),
+    ("read value <<< text", 3011),
+    ("print {1..3}", 3009),
+    ("[[ value =~ val.* ]]", 3015),
+    ("typeset -C value=(field=text)", 3045),
+    ("set -o pipefail", 3040),
+    ("set +o pipefail", 3040),
+    ("print $((0xff))", 3071),
+    ("function name() { :; }", 2111),
+)
+for source, code in unsupported:
+    assert code in codes(source, *dialect), (source, code)
+
+# Selection works through CLI aliases, source directives and the installed
+# SGI pathname; an explicit CLI shell continues to take precedence.
+assert 3040 in codes("set -o pipefail", "--shell=dtksh")
+assert 3040 in codes("# shellcheck shell=irix-dtksh\nset -o pipefail")
+assert 3040 in codes("#!/usr/dt/bin/dtksh\nset -o pipefail")
+assert 3040 not in codes("#!/usr/dt/bin/dtksh\nset -o pipefail", "--shell=ksh")
+
+# ksh93 runs the final pipeline component in the current shell.
+assert 2031 not in codes(
+    'value=outer; print inner | read value; print -r -- "$value"', *dialect)
+assert 2311 not in codes(
+    'set -e; f() { false; print survived; }; value=$(f)', *dialect)
+
+print(f"PASS {checks} IRIX dtksh selection and native-feature contracts")

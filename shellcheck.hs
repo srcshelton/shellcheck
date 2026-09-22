@@ -122,7 +122,7 @@ options = [
         "Specify path when looking for sourced files (\"SCRIPTDIR\" for script's dir)",
     Option "s" ["shell"]
         (ReqArg (Flag "shell") "SHELLNAME")
-        "Specify dialect (sh, bash, dash, ksh, busybox, irix-bsh, irix-jsh, irix-sh, irix-ksh)",
+        "Specify dialect (sh, bash, dash, ksh, busybox, irix-bsh, irix-jsh, irix-sh, irix-ksh, irix-dtksh)",
     Option "" ["sh-variant"]
         (ReqArg (Flag "sh-variant") "SHELLNAME")
         "Treat generic sh shebangs as this dialect",

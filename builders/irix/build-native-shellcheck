@@ -65,7 +65,7 @@ binary="$consumer/source/dist/build/shellcheck/shellcheck"
 "$binary" --version > "$consumer/native-version.txt" 2>> "$log"
 printf '%s\n' 'printf "%s\n" "native smoke"' > "$consumer/smoke-clean.sh"
 printf '%s\n' 'printf "%s\n" $1' > "$consumer/smoke-warning.sh"
-for dialect in irix-sh irix-ksh; do
+for dialect in irix-sh irix-ksh irix-dtksh; do
     "$binary" --norc --shell="$dialect" --format=json1 "$consumer/smoke-clean.sh" \
         > "$consumer/smoke-$dialect-clean.json" 2>> "$log"
     grep '"comments":[[:space:]]*\[\]' "$consumer/smoke-$dialect-clean.json" >/dev/null
@@ -79,7 +79,7 @@ done
 # in pipeline components, nor suppress a real top-level forward call.
 printf '%s\n' 'f() { :; }; f | cat' > "$consumer/smoke-function-pipeline.sh"
 printf '%s\n' 'f; f() { :; }' > "$consumer/smoke-function-forward.sh"
-for dialect in irix-sh irix-ksh; do
+for dialect in irix-sh irix-ksh irix-dtksh; do
     "$binary" --norc --shell="$dialect" --format=json1 --include=SC2218 \
         "$consumer/smoke-function-pipeline.sh" > "$consumer/smoke-$dialect-function-pipeline.json" 2>> "$log"
     grep '"comments":[[:space:]]*\[\]' "$consumer/smoke-$dialect-function-pipeline.json" >/dev/null
@@ -94,5 +94,5 @@ mv "$consumer/bin/shellcheck.tmp" "$consumer/bin/shellcheck"
 cksum "$consumer/bin/shellcheck" > "$consumer/native-binary.cksum"
 cp "$consumer/native-binary.cksum" "$consumer/native-ready.tmp"
 mv "$consumer/native-ready.tmp" "$consumer/native-ready"
-echo 'Native ShellCheck passes version, clean-script and diagnostic gates in both IRIX profiles.'
+echo 'Native ShellCheck passes version, clean-script and diagnostic gates in all three IRIX profiles.'
 echo 'READY for source-matched native/macOS corpus validation; not a release build.'

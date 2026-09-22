@@ -72,6 +72,6 @@ for shell in ("bash", "dash", "irix-sh", "irix-ksh"):
     # The existing default check remains unchanged and is not duplicated.
     check(shell, head + action + "exit 1; }; f",
           1 if shell.startswith("irix") else 0, enabled=False, code=2349)
-for shell in ("sh", "busybox", "ksh", "irix-bsh", "irix-jsh"):
+for shell in ("sh", "busybox", "ksh", "irix-dtksh", "irix-bsh", "irix-jsh"):
     check(shell, """f() { local value=inner; trap 'echo "$value"' 0; }; f""", 0)
 print(f"PASS {count} EXIT-scope CLI contracts")

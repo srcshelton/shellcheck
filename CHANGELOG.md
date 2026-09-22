@@ -20,6 +20,10 @@
 - Native-validated `irix-bsh` and `irix-jsh` aliases for IRIX's older Bourne
   shell, including its non-POSIX substitutions, read/export/test restrictions,
   pipeline scope and brace-form case syntax. Avoid incompatible POSIX advice.
+- Native-validated `irix-dtksh` profile for SGI CDE 5.3.5's
+  `/usr/dt/bin/dtksh` (ksh93 M-12/28/93d), with automatic shebang selection
+  and its supported and rejected language features kept distinct from
+  `irix-ksh`.
 - SC3070: diagnose unsupported `$((expression))` arithmetic expansion in
   `irix-sh`, while preserving IRIX ksh support and native arithmetic commands.
 - SC3071: diagnose C-style hexadecimal arithmetic constants in both IRIX

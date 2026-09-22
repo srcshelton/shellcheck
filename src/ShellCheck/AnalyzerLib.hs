@@ -219,7 +219,8 @@ makeParameters spec = params
                 IrixBsh -> False
                 Ksh  -> True
                 IrixSh -> True
-                IrixKsh -> True,
+                IrixKsh -> True
+                IrixDtksh -> True,
         hasInheritErrexit =
             case shellType params of
                 Bash -> isOptionSet "inherit_errexit" root
@@ -229,7 +230,9 @@ makeParameters spec = params
                 IrixBsh -> True
                 Ksh  -> False
                 IrixSh -> True
-                IrixKsh -> True,
+                IrixKsh -> True
+                -- Native CDE 5.3.5 dtksh preserves errexit in $(...).
+                IrixDtksh -> True,
         hasPipefail =
             case shellType params of
                 Bash -> isOptionSet "pipefail" root
@@ -239,7 +242,9 @@ makeParameters spec = params
                 IrixBsh -> False
                 Ksh  -> isOptionSet "pipefail" root
                 IrixSh -> isOptionSet "pipefail" root
-                IrixKsh -> isOptionSet "pipefail" root,
+                IrixKsh -> isOptionSet "pipefail" root
+                -- ksh93 M-12/28/93d predates pipefail.
+                IrixDtksh -> False,
         hasExecfail =
             case shellType params of
                 Bash -> isOptionSet "execfail" root
@@ -327,6 +332,8 @@ prop_determineShell12 = determineShellTest "#!/bin/busybox ash" == BusyboxSh
 prop_determineShell13 = determineShellTest "# shellcheck shell=irix-sh\ntrue" == IrixSh
 prop_determineShell14 = determineShellTest "# shellcheck shell=irix-ksh\ntrue" == IrixKsh
 prop_determineShell15 = determineShellTest "#!/sbin/env irix-ksh\ntrue" == IrixKsh
+prop_determineShell16 = determineShellTest "#!/usr/dt/bin/dtksh\ntrue" == IrixDtksh
+prop_determineShell17 = determineShellTest "# shellcheck shell=irix-dtksh\ntrue" == IrixDtksh
 
 determineShellTest = determineShellTest' Nothing
 determineShellTest' fallbackShell = determineShell fallbackShell . fromJust . prRoot . pScript
@@ -1008,6 +1015,7 @@ supportsArrays Bash = True
 supportsArrays Ksh = True
 supportsArrays IrixSh = True
 supportsArrays IrixKsh = True
+supportsArrays IrixDtksh = True
 supportsArrays _ = False
 
 isTrueAssignmentSource c =

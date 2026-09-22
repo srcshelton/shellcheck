@@ -81,7 +81,7 @@ for source, expected in cases:
         assert len(comments) == want, (source, comments)
         assert all(c["level"] == "warning" and c["fix"] is None for c in comments)
         count += 1
-for shell in ("sh", "bash", "dash", "busybox", "ksh", "irix-sh", "irix-ksh", "irix-bsh", "irix-jsh"):
+for shell in ("sh", "bash", "dash", "busybox", "ksh", "irix-sh", "irix-ksh", "irix-dtksh", "irix-bsh", "irix-jsh"):
     for source in ("find . -print0 > names; sort < names", "names=\u0060find . -print0\u0060"):
         for control, expected in (("", 1), ("disable=SC2353", 0)):
             result = subprocess.run(

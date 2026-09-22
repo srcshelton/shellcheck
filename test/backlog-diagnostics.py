@@ -24,7 +24,7 @@ def check(source, code, expected, shell="bash", *options):
 
 
 for shell in ("sh", "bash", "dash", "busybox", "ksh", "irix-sh",
-              "irix-ksh", "irix-bsh", "irix-jsh"):
+              "irix-ksh", "irix-dtksh", "irix-bsh", "irix-jsh"):
     source = 'printf "%s\\n" "${value:-\'default\'}"'
     comments = check(source, 2350, 1, shell)
     assert comments[0]["level"] == "warning" and comments[0]["fix"] is None
@@ -58,7 +58,7 @@ for shell in ("sh", "bash", "dash", "busybox", "ksh", "irix-sh",
     check('f() { false; set +x; }; if { :; f; }; then :; fi',
           2352, 1, shell, "--enable=check-function-tracing-status")
 
-for shell in ("bash", "ksh", "irix-sh", "irix-ksh"):
+for shell in ("bash", "ksh", "irix-sh", "irix-ksh", "irix-dtksh"):
     source = 'typeset value="${a:-`false`}${b:-`false`}"'
     check(source, 2155, 1, shell)
     check('# shellcheck disable=SC2155\n' + source, 2155, 0, shell)

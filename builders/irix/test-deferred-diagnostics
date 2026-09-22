@@ -67,7 +67,7 @@ for shell in ("irix-sh", "irix-ksh"):
                         shell, "--include=SC2349")
     assert not comments(hazard.replace(" 0\n", " TERM\n"), shell, "--include=SC2349")
 
-for shell in ("sh", "bash", "dash", "busybox", "ksh", "irix-bsh", "irix-jsh"):
+for shell in ("sh", "bash", "dash", "busybox", "ksh", "irix-dtksh", "irix-bsh", "irix-jsh"):
     assert not comments(hazard, shell, "--include=SC2349")
 
 print(f"PASS {checks} deferred-diagnostic CLI, suppression and profile contracts")

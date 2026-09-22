@@ -103,14 +103,16 @@ This first functional build uses `-O0` and disables executable/library
 stripping. Cabal's default archive stripping assumes GNU `strip` options that
 IRIX `strip` does not implement. Release executable stripping and processor
 optimisation are separate qualification steps, not abandoned requirements.
-The shellcheck phase enables only `irix-legacy-ghc`, checks both IRIX profiles
-with clean and SC2086-producing inputs, and publishes a private `bin/shellcheck`
+The shellcheck phase enables only `irix-legacy-ghc`, checks all three IRIX
+`sh`, `ksh`, and `dtksh` profiles with clean and SC2086-producing inputs, and
+publishes a private `bin/shellcheck`
 plus `native-ready` only after the native runtime gates pass. It is not a
 release or a completed native/macOS equivalence result.
 
 Focused harness tests use `IRIX_TEST_PARENT` beneath a durable session workspace:
 `test-native-setup`, `test-native-dependencies`, `test-native-shellcheck`, and
-`python3 test-prepare-native-plan`. `test-native-aeson-overlay` additionally
+`python3 test-prepare-native-plan`. `test-dtksh-profile` checks the separately
+probed SGI CDE 5.3.5 language boundary. `test-native-aeson-overlay` additionally
 requires `IRIX_AESON_SOURCE` pointing to the exact original pinned source.
 `test-native-integer-logarithms-overlay` uses `IRIX_INTEGER_LOGARITHMS_SOURCE`
 for its exact upstream preimage and CPP branch matrix.

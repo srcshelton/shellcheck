@@ -69,6 +69,8 @@ analyzeScript spec = newAnalysisResult {
     profileDefaultOptionalChecks shell
         | shell `elem` [IrixSh, IrixKsh] =
             ["check-irix-wait-status", "check-unused-suppressions"]
+        | shell == IrixDtksh =
+            ["check-unused-suppressions"]
         | otherwise = []
 
     stripDisableDirectives = doTransform strip

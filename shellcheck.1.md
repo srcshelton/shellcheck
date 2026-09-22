@@ -117,7 +117,8 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
 **-s**\ *shell*,\ **--shell=***shell*
 
 :   Specify Bourne shell dialect. Valid values are *sh*, *bash*, *dash*, *ksh*,
-    *busybox*, *irix-bsh*, *irix-jsh*, *irix-sh*, and *irix-ksh*.
+    *busybox*, *irix-bsh*, *irix-jsh*, *irix-sh*, *irix-ksh*, and
+    *irix-dtksh*.
     The default is to deduce the shell from the file's `shell` directive,
     shebang, or `.bash/.bats/.dash/.ksh` extension, in that order. *sh* refers to
     POSIX `sh` (not the system's), and will warn of portability issues.
@@ -127,7 +128,19 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     Job-control commands still require an appropriate terminal/session; this
     profile does not guarantee interactive job-control availability.
     *irix-sh* models IRIX `/sbin/sh`; *irix-ksh* models the same IRIX shell
-    executable when invoked in Korn-shell mode.
+    executable when invoked in Korn-shell mode. *irix-dtksh* models
+    `/usr/dt/bin/dtksh` from SGI CDE 5.3.5, whose embedded shell identifies
+    itself as ksh93 `Version M-12/28/93d`. A `/usr/dt/bin/dtksh` shebang
+    selects this profile automatically.
+
+    The dtksh profile combines that older ksh93 language with IRIX platform
+    utilities. It accepts observed ksh93d features including string slicing
+    and replacement, associative arrays, namerefs, floating-point variables,
+    extended globs and ANSI-C quoting. It rejects later constructs absent from
+    SGI's binary: process substitution (SC3001), brace expansion (SC3009),
+    here-strings (SC3011), `=~` matching (SC3015), `set -o pipefail` (SC3040),
+    and `typeset -C` compound variables (SC3045). As with contemporary ksh,
+    combining the `function` keyword with `()` is rejected (SC2111).
 
     Default IRIX sh does not evaluate `$(command)` or `$((expression))`
     expansions (SC3068 and SC3070). The documented `_XPG=1` mode enables
@@ -182,7 +195,8 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
 
 :   Treat a generic `sh` shebang as the specified dialect. This affects scripts
     using interpreters such as `/bin/sh`, while explicit `bash`, `dash`, `ksh`,
-    `busybox`, `bsh`, `jsh`, `irix-bsh`, `irix-jsh`, `irix-sh`, and `irix-ksh`
+    `busybox`, `bsh`, `jsh`, `irix-bsh`, `irix-jsh`, `irix-sh`, `irix-ksh`,
+    and `irix-dtksh`
     shebangs retain their own dialect. An
     explicit `shell` override takes precedence.
 

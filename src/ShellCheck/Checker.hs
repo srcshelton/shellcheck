@@ -185,6 +185,10 @@ prop_irixProfilesEnableSafetyChecksByDefault = conjoin
         all (`elem` checkIrix source) [2337, 2348]
     , counterexample "irix-ksh did not enable SC2337 and SC2348" $
         all (`elem` checkIrixKsh source) [2337, 2348]
+    , counterexample "irix-dtksh did not enable SC2337" $
+        2337 `elem` checkIrixDtksh source
+    , counterexample "irix-dtksh unexpectedly enabled the /sbin wait-status check" $
+        2348 `notElem` checkIrixDtksh source
     , counterexample "generic ksh unexpectedly enabled IRIX profile checks" $
         null $ intersect [2337, 2348] $ check genericSource
     ]
@@ -198,19 +202,19 @@ prop_irixProfilesEnableSafetyChecksByDefault = conjoin
         ]
     genericSource = "#!/bin/ksh\n" ++ source
 
-prop_irixInheritsErrexitWithOptionalCheck = all checkProfile ["irix-sh", "irix-ksh"]
+prop_irixInheritsErrexitWithOptionalCheck = all checkProfile ["irix-sh", "irix-ksh", "irix-dtksh"]
   where
     checkProfile shell = null $ intersect [2310, 2311] $ checkWithOption
         "check-set-e-suppressed" ("# shellcheck shell=" ++ shell ++ "\n" ++ source)
     source = "set -e; probe(){ false; echo survived; }; value=`probe`; echo \"after:<$value>\""
 
-prop_irixStillChecksConditionalErrexit = all checkProfile ["irix-sh", "irix-ksh"]
+prop_irixStillChecksConditionalErrexit = all checkProfile ["irix-sh", "irix-ksh", "irix-dtksh"]
   where
     checkProfile shell = [2310] == (intersect [2310, 2311] $ check
         ("# shellcheck shell=" ++ shell ++ " enable=check-set-e-suppressed\n" ++ source))
     source = "set -e; probe(){ false; echo survived; }; if probe; then echo after; fi"
 
-prop_irixErrexitWorkaroundBecomesUnused = all checkProfile ["irix-sh", "irix-ksh"]
+prop_irixErrexitWorkaroundBecomesUnused = all checkProfile ["irix-sh", "irix-ksh", "irix-dtksh"]
   where
     checkProfile shell = [2337] == (intersect [2311, 2337] $ check
         ("# shellcheck shell=" ++ shell ++ " enable=check-set-e-suppressed\n" ++ source))
@@ -428,6 +432,15 @@ checkIrixKsh src =
             csShellTypeOverride = Just IrixKsh
         }
 
+checkIrixDtksh src =
+    getErrors
+        (mockedSystemInterface [])
+        emptyCheckSpec {
+            csScript = src,
+            csExcludedWarnings = [2148],
+            csShellTypeOverride = Just IrixDtksh
+        }
+
 prop_irixAcceptsBraceCase =
     null $ intersect [1072, 1073] $ checkIrix "case value {\nvalue) echo yes;;\n}"
 prop_irixAcceptsTrailingCoprocess =
@@ -471,7 +484,7 @@ prop_irixRejectsArithmeticExpansion = conjoin
 prop_irixArithmeticExpansionIsProfileSpecific = conjoin
     [ counterexample shell $ 3070 `notElem` check
         ("# shellcheck shell=" ++ shell ++ "\necho $((1 + 1))")
-    | shell <- ["sh", "bash", "dash", "ksh", "busybox", "irix-ksh"]]
+    | shell <- ["sh", "bash", "dash", "ksh", "busybox", "irix-ksh", "irix-dtksh"]]
 prop_irixAcceptsArithmeticCommands = conjoin
     [ counterexample source $ 3070 `notElem` checkIrix source
     | source <- [ "line=1; let \"line = line + 1\"; echo \"$line\""
@@ -484,7 +497,7 @@ prop_irixArithmeticExpansionCanBeDisabled =
 prop_irixRejectsCStyleHexArithmetic = conjoin
     [ counterexample (shell ++ ": " ++ source) $ 3071 `elem` check
         ("# shellcheck shell=" ++ shell ++ "\n" ++ source)
-    | shell <- ["irix-sh", "irix-ksh"]
+    | shell <- ["irix-sh", "irix-ksh", "irix-dtksh"]
     , source <- [ "features=26; let '(features & ~0x1a) == 0'"
                 , "let 'number = 0X1A'"
                 , "((number = 0x1a))"
@@ -499,7 +512,7 @@ prop_irixHexArithmeticDoesNotAffectOtherShells = conjoin
 prop_irixAcceptsBaseHashAndHexStrings = conjoin
     [ counterexample (shell ++ ": " ++ source) $ 3071 `notElem` check
         ("# shellcheck shell=" ++ shell ++ "\n" ++ source)
-    | shell <- ["irix-sh", "irix-ksh"]
+    | shell <- ["irix-sh", "irix-ksh", "irix-dtksh"]
     , source <- [ "let 'number = 16#1a'"
                 , "word=ffffffff; let \"number = 16#${word}\""
                 , "let '(features & ~26) == 0'"
@@ -515,7 +528,7 @@ prop_dynamicBracketCaseStyle = conjoin
     [ counterexample shell $ 2340 `notElem` checkWithOption
         "require-single-quoted-case-patterns"
         ("# shellcheck shell=" ++ shell ++ "\n" ++ source)
-    | shell <- ["sh", "bash", "ksh", "irix-sh", "irix-ksh"]
+    | shell <- ["sh", "bash", "ksh", "irix-sh", "irix-ksh", "irix-dtksh"]
     , source <- [ "controls=a-z; case \"${text}\" in *[${controls}]*) :;; *) :;; esac"
                 , "controls=`print '\\001-\\010\\013-\\037\\177'`; case \"${text}\" in *[${controls}]*) :;; *) :;; esac"
                 ]]
