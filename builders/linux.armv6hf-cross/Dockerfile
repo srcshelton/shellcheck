@@ -49,6 +49,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends lld-19 \
     && validate-elf /qualification/lld-abi-probe \
     && qemu-arm-static -cpu arm1176 /qualification/lld-abi-probe \
     && dpkg-query -W > /qualification/packages.tsv
+# Hadrian needs Hackage metadata before it can resolve its own dependencies.
+# Its upstream cabal.project retains the pinned index-state.
+RUN cabal update \
+    && cabal --project-file=/ghc/hadrian/cabal.project new-build \
+       --with-compiler=ghc --disable-documentation --disable-profiling \
+       --disable-library-profiling -j2 --dry-run exe:hadrian
 RUN ./boot.source \
     && CC="$TARGET-gcc" CXX="$TARGET-g++" CC_STAGE0=gcc CXX_STAGE0=g++ \
        LLC=llc-19 OPT=opt-19 LLVMAS=clang-19 \
