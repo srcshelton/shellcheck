@@ -20,6 +20,9 @@ FROM c-toolchain-config AS c-toolchain
 RUN /opt/ctng/bin/ct-ng build || { result=$?; tail -n 120 build.log; exit "$result"; }
 
 FROM debian:trixie-slim
+# hsc2hs cross-codegen writes locale-encoded text, including source comments.
+# Debian's built-in UTF-8 locale avoids the unset-locale ASCII failure.
+ENV LANG=C.UTF-8 LC_ALL=C.UTF-8
 ENV TARGET=armv6-unknown-linux-gnueabihf
 ENV TARGETNAME=linux.armv6hf
 ENV PATH=/opt/armv6-toolchain/bin:/usr/local/bin:/usr/bin:/bin

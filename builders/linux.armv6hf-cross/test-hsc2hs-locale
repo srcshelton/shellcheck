@@ -1,0 +1,36 @@
+#!/usr/bin/env python3
+"""Actual host hsc2hs/target-C regression; output directory must be fresh."""
+import argparse
+import os
+from pathlib import Path
+import subprocess
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--hsc2hs', required=True)
+parser.add_argument('--cc', required=True)
+parser.add_argument('--template', required=True)
+parser.add_argument('--output', type=Path, required=True)
+args = parser.parse_args()
+args.output.mkdir()
+source = args.output / 'LocaleProbe.hsc'
+source.write_text('module LocaleProbe where\n-- UTF-8: read-mod‐ify, café\nvalue :: Int\nvalue = #{const 42}\n', encoding='utf-8')
+for label, locale_name in [('ascii', 'C'), ('utf8', 'C.UTF-8')]:
+    output = args.output / (label + '.hs')
+    command = [args.hsc2hs, '--cross-compile', '--cc=' + args.cc,
+               '--ld=' + args.cc, '--template=' + args.template,
+               str(source), '-o', str(output)]
+    env = dict(os.environ, LANG=locale_name, LC_ALL=locale_name)
+    result = subprocess.run(command, env=env, stdout=subprocess.PIPE,
+                            stderr=subprocess.STDOUT, check=False)
+    (args.output / (label + '.log')).write_bytes(result.stdout)
+    (args.output / (label + '.status')).write_text(str(result.returncode) + '\n')
+    if label == 'ascii':
+        assert result.returncode != 0 and b'cannot encode character' in result.stdout, result.stdout
+    else:
+        assert result.returncode == 0, result.stdout
+        text = output.read_text(encoding='utf-8')
+        assert 'value = 42' in text, text
+        with (args.output / 'host-typecheck.log').open('wb') as log:
+            subprocess.run(['ghc', '-fno-code', str(output)], env=env,
+                           stdout=log, stderr=subprocess.STDOUT, check=True)
+print('PASS C locale reproduces hsc2hs encoding failure; C.UTF-8 emits compilable Haskell', flush=True)
