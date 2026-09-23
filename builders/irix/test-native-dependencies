@@ -77,7 +77,7 @@ bash "$here/build-native-dependencies" > "$test_dir/changed.log" 2>&1 || status=
 # Isolate smoke-gate control flow from exact-source overlays (separate tests).
 mkdir "$test_dir/smoke-harness"
 cp "$here/build-native-dependencies" "$test_dir/smoke-harness/"
-cp "$here/native-consumer-profile" "$test_dir/smoke-harness/"
+cp "$here/native-consumer-profile" "$here/native-run-root" "$test_dir/smoke-harness/"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$test_dir/smoke-harness/apply-native-dependency-overlays"
 for package in integer-logarithms-1.0.3.1 text-1.2.3.1; do
     mkdir -p "$consumer/sources/$package"

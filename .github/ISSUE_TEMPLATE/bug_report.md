@@ -12,7 +12,8 @@ assignees: ''
 - Rule Id (if any, e.g. SC1000):
 - My shellcheck version (`shellcheck --version` or "online"):
 - [ ] The rule's wiki page does not already cover this (e.g. https://shellcheck.net/wiki/SC2086)
-- [ ] I tried on https://www.shellcheck.net/ and verified that this is still a problem on the latest commit
+- [ ] I reproduced this with this fork and included its full `shellcheck --version` output
+- If applicable, does upstream ShellCheck reproduce it? The online checker at https://www.shellcheck.net/ does not include fork-only profiles or checks.
 
 #### Here's a snippet or screenshot that shows the problem:
 

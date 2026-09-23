@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Reject private workspace material in a generated source distribution."""
+import io
+from pathlib import PurePosixPath
+import re
+import sys
+import tarfile
+import unittest
+
+PATTERNS = {
+    "private workspace reference": re.compile(r"\.worktrees/[A-Za-z0-9_-]+"),
+    "personal absolute home path": re.compile(r"/(?:Users|home)/[A-Za-z0-9_.-]+/"),
+    "session UUID": re.compile(r"\b[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\b", re.I),
+    "installation-specific user guard": re.compile(r'id -un[^\n]*=\s*["\']?co' r'dex\b'),
+}
+
+
+def inspect_archive(archive):
+    problems = []
+    for member in archive.getmembers():
+        path = PurePosixPath(member.name)
+        if path.is_absolute() or ".." in path.parts or any(
+                part in {".git", ".worktrees", "__pycache__"} for part in path.parts):
+            problems.append((member.name, "private or unsafe archive path"))
+        if member.isdir():
+            continue
+        if not member.isfile():
+            problems.append((member.name, "unexpected non-regular source member"))
+            continue
+        data = archive.extractfile(member).read()
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError:
+            continue  # e.g. the documented editor screenshots
+        for reason, pattern in PATTERNS.items():
+            if pattern.search(text):
+                problems.append((member.name, reason))
+    return problems
+
+
+class HygieneTests(unittest.TestCase):
+    def inspect(self, name, content):
+        stream = io.BytesIO()
+        with tarfile.open(fileobj=stream, mode="w") as archive:
+            member = tarfile.TarInfo(name)
+            payload = content.encode()
+            member.size = len(payload)
+            archive.addfile(member, io.BytesIO(payload))
+        stream.seek(0)
+        with tarfile.open(fileobj=stream) as archive:
+            return inspect_archive(archive)
+
+    def test_public_platform_details_are_allowed(self):
+        self.assertEqual(self.inspect("ShellCheck/README.md", "IRIX /sbin/sh and /usr/nekoware/bin/gcc\n"), [])
+
+    def test_private_paths_are_rejected(self):
+        self.assertTrue(self.inspect("ShellCheck/.work" + "trees/log", "log"))
+        self.assertTrue(self.inspect("ShellCheck/README.md", "/Us" + "ers/example/private/log"))
+        self.assertTrue(self.inspect("../escape", "log"))
+
+    def test_session_identity_and_user_guard_are_rejected(self):
+        identity = "-".join("1" * size for size in (8, 4, 4, 4, 12))
+        self.assertTrue(self.inspect("ShellCheck/README.md", identity))
+        self.assertTrue(self.inspect("ShellCheck/test", 'test "$(id -un)" = co' + 'dex'))
+
+
+if __name__ == "__main__":
+    if sys.argv[1:] == ["--self-test"]:
+        unittest.main(argv=[sys.argv[0]])
+    if len(sys.argv) != 2:
+        sys.exit("usage: release-hygiene SOURCE.tar.gz | --self-test")
+    with tarfile.open(sys.argv[1], "r:*") as source:
+        failures = inspect_archive(source)
+    for member, reason in failures:
+        print(f"{member}: {reason}", file=sys.stderr)
+    if failures:
+        sys.exit(1)
+    print("PASS source archive release hygiene")

@@ -27,7 +27,7 @@ source "$here/native-consumer-profile"
 [[ " ${optimization_options[*]} " == *" --ghc-option=-pgmc --ghc-option=$consumer/harness/native-shellcheck-cc "* ]] || exit 1
 [[ " ${optimization_options[*]} " == *" --ghc-option=-pgma --ghc-option=$consumer/harness/native-shellcheck-cc "* ]] || exit 1
 mkdir -p "$test_dir/repository/builders/irix" "$test_dir/ghc-7.10.3/inplace/bin"
-cp "$here/native-shellcheck-cc" "$here/native-shellcheck-link" "$here/native-consumer-profile" "$consumer/harness/"
+cp "$here/native-shellcheck-cc" "$here/native-shellcheck-link" "$here/native-consumer-profile" "$here/native-run-root" "$consumer/harness/"
 chmod +x "$consumer/harness/native-shellcheck-cc" "$consumer/harness/native-shellcheck-link"
 cat > "$test_dir/repository/builders/irix/collapse-library-search-paths" <<'EOF'
 #!/usr/bin/env bash

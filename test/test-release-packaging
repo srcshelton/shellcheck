@@ -1,0 +1,72 @@
+#!/usr/bin/env python3
+"""Exercise binary archive metadata with disposable mock executable payloads."""
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import tarfile
+import tempfile
+import unittest
+import zipfile
+
+REPO = Path(__file__).resolve().parent.parent
+
+
+class PackagingTests(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(
+            prefix="release-packaging-", dir=os.environ["TEST_OUTPUT_PARENT"])
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name)
+        self.deploy = self.root / "deploy"
+        self.deploy.mkdir()
+        shutil.copyfile(REPO / "LICENSE", self.root / "LICENSE")
+        tools = self.root / "tools"
+        tools.mkdir()
+        for name, alternatives in [("tar", ("gtar", "tar")), ("sha512sum", ("sha512sum", "gsha512sum"))]:
+            found = next((shutil.which(tool) for tool in alternatives if shutil.which(tool)), None)
+            if not found:
+                self.skipTest(f"{name} is required")
+            (tools / name).symlink_to(found)
+        for target in ("linux.x86_64", "windows.x86_64"):
+            directory = self.deploy / target
+            directory.mkdir()
+            (directory / "shellcheck").write_bytes(b"mock executable\n")
+        self.env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ["PATH"],
+                        TAGS="test-release", SOURCE_REVISION="1" * 40, SOURCE_VERSION="v0.11.0-test")
+
+    def run_packager(self):
+        return subprocess.run(["/bin/bash", str(REPO / ".prepare_deploy")], cwd=self.deploy,
+                              env=self.env, capture_output=True, text=True)
+
+    def test_archives_identify_the_built_source_not_packager_checkout(self):
+        result = self.run_packager()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        expected = (self.deploy / "README.txt").read_bytes()
+        self.assertIn(b"Source revision: " + b"1" * 40, expected)
+        self.assertIn(b"Source version: v0.11.0-test", expected)
+        self.assertIn(b"github.com/srcshelton/shellcheck", expected)
+        self.assertIn(b"\r\n", expected)
+        self.assertNotIn(b"Latest commits", expected)
+        self.assertNotIn(b"Signed-off-by", expected)
+        self.assertNotIn(str(self.root).encode(), expected)
+        for suffix in ("tar.xz", "tar.gz"):
+            with tarfile.open(self.deploy / ("shellcheck-test-release.linux.x86_64." + suffix)) as archive:
+                self.assertEqual(archive.extractfile("shellcheck-test-release/README.txt").read(), expected)
+        with zipfile.ZipFile(self.deploy / "shellcheck-test-release.zip") as archive:
+            self.assertEqual(archive.read("README.txt"), expected)
+
+    def test_bad_metadata_is_rejected(self):
+        for key, value in [("SOURCE_REVISION", "HEAD"), ("SOURCE_REVISION", "a" * 39),
+                           ("SOURCE_VERSION", "bad\nversion")]:
+            with self.subTest(key=key, value=value):
+                original = self.env[key]
+                self.env[key] = value
+                result = self.run_packager()
+                self.assertEqual(result.returncode, 2, result.stderr)
+                self.assertFalse((self.deploy / "README.txt").exists())
+                self.env[key] = original
+
+
+if __name__ == "__main__":
+    unittest.main()

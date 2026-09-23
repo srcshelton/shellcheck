@@ -1,8 +1,9 @@
 # Sourced by the private consumer drivers and compiler adapters.
-# The functional binary/package DB used by corpus validation is immutable.
+# Each profile keeps its own binary and private package database.
 # shellcheck shell=bash
 # shellcheck disable=SC2034 # Shared configuration is consumed by the sourcing driver.
-run_root=${IRIX_RUN_ROOT-/var/tmp/haskell-ghc-irix-experiment}
+source "$(dirname "${BASH_SOURCE[0]}")/native-run-root" || exit "$?"
+irix_validate_run_root || exit "$?"
 profile=${IRIX_CONSUMER_PROFILE-functional}
 if [ -n "${IRIX_MIPSPRO_TARGET-}" ] && [ "$profile" != mipspro ]; then
     echo 'Processor variants require explicit MIPSpro selection' >&2
@@ -51,5 +52,5 @@ case "$profile" in
 esac
 export IRIX_CONSUMER_PROFILE="$profile"
 # Keep compiler/configure scratch resumable with this private build, not /tmp.
-mkdir -p "$consumer/tmp"
+mkdir -p "$consumer/tmp" || exit "$?"
 export TMPDIR="$consumer/tmp"

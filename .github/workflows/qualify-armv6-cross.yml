@@ -54,6 +54,7 @@ jobs:
           sudo apt-get install -y cabal-install
           ./setgitversion
           cabal sdist
+          python3 test/release-hygiene dist-newstyle/sdist/ShellCheck-*.tar.gz
           cp dist-newstyle/sdist/ShellCheck-*.tar.gz evidence/source.tar.gz
           sha256sum evidence/source.tar.gz > evidence/source.sha256
       - name: Build old and new ARMv6 binaries and compare contracts

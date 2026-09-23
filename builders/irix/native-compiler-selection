@@ -1,5 +1,7 @@
 # Sourced selection functions. No compiler/build activity occurs on sourcing.
 # shellcheck shell=bash
+# shellcheck disable=SC2034 # Shared profile variables are consumed by callers.
+source "$(dirname "${BASH_SOURCE[0]}")/native-run-root" || return "$?"
 selection_error() { printf 'Compiler selection: %s\n' "$*" >&2; return 2; }
 
 selection_profile() {
@@ -69,7 +71,7 @@ selection_exited() {
 }
 
 selection_gate_inputs() {
-    printf '%s\n' native-consumer-profile native-shellcheck-cc native-shellcheck-link build-native-optimized
+    printf '%s\n' native-run-root native-consumer-profile native-shellcheck-cc native-shellcheck-link build-native-optimized
     if [ "$selected" = mipspro ]; then
         printf '%s\n' native-mipspro-cc ghc710-mipspro-hc
         if [ -n "${IRIX_MIPSPRO_TARGET-}" ]; then printf '%s\n' mipspro-target-profile; fi
@@ -121,7 +123,7 @@ selection_validate_gates() {
             selection_manifest_has "$job/artifacts/five-suite-inputs.cksum" "$consumer/$required" || return 2
         done
     fi
-    # Selection must precede package state; never adopt a suspended control.
+    # Selection must precede package state; never adopt an existing build.
     if [ "${1-}" != --lowerer-requalification ] && [ "${1-}" != --layout-transport-requalification ]; then
         [ ! -d "$consumer/package.conf.d" ] || { selection_error 'package database already exists'; return 2; }
     fi
@@ -450,9 +452,7 @@ selection_choose() {
 
 selection_main() {
     local mode=${1-} requested=${2-} control sealed pending status
-    run_root=${IRIX_RUN_ROOT-/var/tmp/haskell-ghc-irix-experiment}
-    case "$run_root" in /*) ;; *) selection_error 'run root must be absolute'; return 2 ;; esac
-    case "$run_root" in *[[:space:]]*|*'/../'*|*'/./'*) return 2 ;; esac
+    irix_validate_run_root || return "$?"
     case "$requested" in auto|mipspro|gcc) ;; *) return 2 ;; esac
     control="$run_root/shellcheck-native-selection"
     if [ -n "${IRIX_MIPSPRO_TARGET-}" ]; then

@@ -97,7 +97,7 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     *check-function-tracing-status* (SC2352) advises about trailing tracing
     toggles in functions whose status is directly tested. Neither policy is
     enabled by default, including under the IRIX profiles. See
-    `doc/backlog-diagnostics.md` for exact boundaries and examples.
+    `doc/additional-checks.md` for exact boundaries and examples.
     *check-filename-streams* (SC2353) tracks filename delimiters through known
     pipelines, saved streams, substitutions, read loops and bounded static
     function calls. Unknown commands/options terminate tracking; silence is
@@ -106,7 +106,7 @@ not warn at all, as `ksh` supports decimals in arithmetic contexts.
     actions that outlive function-local values after return, plus nested
     explicit-exit calls on IRIX. It does not treat implicit errexit as an
     explicit exit. Shell and control-flow limits are documented in
-    `doc/backlog-diagnostics.md`; this check is not enabled by a profile.
+    `doc/additional-checks.md`; this check is not enabled by a profile.
 
 **-P**\ *SOURCEPATH*,\ **--source-path=***SOURCEPATH*
 

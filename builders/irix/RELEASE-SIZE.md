@@ -1,44 +1,51 @@
-# Native release-size qualification
+# Preparing a native IRIX executable for release
 
-The 2026-09-21 MIPSpro candidate was tested with the installed IRIX strip,
-without modifying the checksum-pinned unstripped qualification input.
-This is release preparation, not a new public release or a full-corpus
-equivalence result.
+## Strip a separate output
 
-| Artifact | Bytes | POSIX checksum |
-| --- | ---: | ---: |
-| Original MIPSpro executable | 116,942,068 | 3536905206 |
-| Default native strip, isolated output | 87,068,748 | 695472547 |
+Keep the unstripped executable for debugging and recovery. IRIX's native strip
+supports a separate output file:
 
-The reduction is 29,873,320 bytes (25.55%). The stripped SHA-256 is
-`cb1717bedbf169ecfc1479094b4b2407adaadd72ab919f1bb9062a1d578c7851`.
-The original SHA-256 remains
-`7c5f5d833970e43e95a454906a9c27da4ed17b946595c467bf4e95f62068ddde`.
+```sh
+/usr/bin/strip -o shellcheck.stripped shellcheck.unstripped
+chmod 755 shellcheck.stripped
+```
 
-The operation was `/usr/bin/strip -o NEW_OUTPUT IMMUTABLE_INPUT`, followed
-by chmod 755 because IRIX strip creates mode 0644. No -s/-k options were used.
-Use a fresh private output/scratch directory, check actual exit status and
-output, and recheck the original checksum. Installed strip(1) documents up
-to three times the original size in temporary space: reserve that headroom
-in addition to the 524288 KiB disk floor before starting. Keep an unstripped
-debug/recovery copy and use a new binary identity for any validation results.
+Run in a fresh private output directory, with a new output pathname. IRIX strip
+creates mode 0644, hence the explicit chmod. Check each command's exit status.
+Do not use GNU strip options from another platform or let Cabal strip dependency
+archives with incompatible options.
 
-Both executables returned identical version output and identical status,
-stdout and stderr for all eight irix-sh/irix-ksh clean, SC2086 and SC2218
-true/false gates. Offline comparison proved identical entry point, ISA/ABI
-flags, all program headers and all 39 allocated section layouts/payloads.
-Default stripping removed nonallocated debugging/comment sections. These
-focused checks do not replace full same-source corpus comparisons.
+The installed IRIX strip(1) documents up to three times the input size in
+temporary space. Reserve that headroom in addition to the build's 524288 KiB
+free-space floor and put scratch on an adequately sized private filesystem.
+Record the tool version, command and input/output checksums; verify that the
+unstripped input did not change.
+
+Default native stripping has been exercised on a MIPSpro-built executable and
+removed nonallocated debugging/comment sections without changing allocated
+section payloads or program headers. The size reduction is build-dependent;
+it is not a runtime-speed guarantee or qualification of another executable.
+
+Before distributing the stripped result:
+
+1. Compare version output and ELF entry point, ISA/ABI, program headers and
+   allocated section layout/payloads with the original.
+2. Run all five IRIX profiles' clean, SC2086 and SC2218 true/false gates on both
+   binaries; compare exit status, stdout and stderr.
+3. Perform same-source semantic comparisons and execute the actual target
+   ISA/CPU variant. Keep separate results for each binary checksum.
+4. Package the binary, licence and accurate source/version information. Do not
+   include proprietary IRIX or MIPSpro files.
 
 ## Object splitting
 
-The installed GCC-bootstrapped GHC 7.10.3 reports
-`--print-object-splitting-supported` as `NO`. An actual `-O2 -split-objs`
-compile using the qualified MIPSpro C/assembler/link adapters emitted
-`Warning: ignoring -fsplit-objs`, then linked and ran successfully.
-It produced an ordinary Main.o (6064 bytes), not split objects.
+The GHC 7.10.3 IRIX toolchain used by this harness reports
+`--print-object-splitting-supported` as `NO`. An actual MIPSpro-backed compile
+with `-split-objs` emitted `Warning: ignoring -fsplit-objs` and produced an
+ordinary object file, not split objects.
 
-Consequently adding the flag does not reduce this build. The ladder recipes'
-`SplitObjs=NO` remain unchanged. Enabling/supporting object splitting would
-be separate compiler/toolchain work with its own correctness and build-time
-qualification, not a release-command toggle. No GHC rebuild was performed.
+Adding that flag therefore does not reduce this build. The toolchain's
+`SplitObjs=NO` setting should remain unchanged unless object splitting is
+implemented and independently qualified. Supporting it would require compiler
+work, not a packaging option. This limitation is specific to this toolchain,
+not a claim about every GHC version or target.

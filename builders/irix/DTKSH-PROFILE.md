@@ -1,4 +1,7 @@
-# IRIX CDE dtksh profile evidence
+# IRIX CDE dtksh profile
+
+Use `shellcheck --shell=irix-dtksh script.dtsh`, or a
+`#!/usr/dt/bin/dtksh` shebang, to select this profile on any ShellCheck host.
 
 `irix-dtksh` models the executable shipped by SGI's August 2006 IRIX 6.5
 Complementary Applications media as product `Common Desktop Environment,
@@ -16,9 +19,9 @@ runtime/support files, not source code; `src/cde1/dtksh/dtksh` records SGI's
 build-tree input pathname. The public CDE source is therefore corroborating
 source for the language core, not a claim of byte-identical SGI 5.3.5 source.
 
-The package executable was copied with its matching `libXm`, `libDtSvc`,
-`libDtWidget`, and `libDtHelp` libraries, requickstarted only in a disposable
-directory, and exercised on IRIX 6.5.30. The native matrix established:
+Native execution requires matching CDE libraries (`libXm`, `libDtSvc`,
+`libDtWidget` and `libDtHelp`); they are not needed to analyse scripts on
+another host. The following boundaries were exercised on IRIX 6.5.30:
 
 | Accepted | Rejected or different |
 | --- | --- |
@@ -35,11 +38,12 @@ The final pipeline component runs in the current shell. `read` accepts
 `set -e`, a failing command inside `$(...)` terminates the substitution and
 the enclosing assignment returns failure, confirming inherited errexit.
 
-Source tests cover aliases/directives/shebangs, CLI precedence, supported and
-unsupported constructs, read flags, arithmetic constants, function syntax,
-and pipeline scope. `test-dtksh-profile` is the compiled CLI contract. The
-native build gate also exercises `irix-dtksh` alongside `irix-sh` and
-`irix-ksh`. A 24-file SGI package corpus selected the profile automatically
-from `/usr/dt/bin/dtksh` shebangs and produced output identical to an explicit
-`--shell=irix-dtksh` run. Supplying the packaged `DtFuncs.dtsh` through the
-extracted sysroot removed both missing-source observations.
+When analysing scripts which source `DtFuncs.dtsh`, supply the matching file
+using ShellCheck's documented source-path configuration. A missing sourced
+file is not a dtksh syntax error. Do not redistribute proprietary CDE files
+as part of ShellCheck.
+
+From a Git checkout, run `python3 builders/irix/test-dtksh-profile SHELLCHECK`
+to check aliases, directives, shebang selection, CLI precedence and language
+boundaries against your compiled binary. See the [manual](../../shellcheck.1.md)
+for configuration and differences from `irix-ksh`.

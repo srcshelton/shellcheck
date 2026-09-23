@@ -1,8 +1,8 @@
-# Diagnostic scope and limits
+# Diagnostic scope and limitations
 
-These checks do not modify shell scripts, their execution, or the shared
-CFG/DFA transfer rules. They change findings deliberately; no static analyzer can promise zero regressions
-for all possible shell programs.
+These checks analyse shell source without executing or modifying it. The
+following boundaries explain when a diagnostic applies and when the analysis
+declines to infer runtime behaviour. Silence is not proof that a script is safe.
 
 ## SC2030 / SC2031: separate local bindings
 
@@ -21,16 +21,16 @@ new interprocedural model of dynamically scoped calls.
 The existing postdominator check is retained. An additional conservative rule
 covers a reachable top-level call before an unconditional same-source function
 definition, including an error branch that exits before reaching the definition.
-This diagnoses the previously missed `_usage` call in `mpivis`.
+For example, an error branch can call a usage function and exit before the
+function's definition is reached.
 
 The additional rule declines status probes, calls inside functions, common
 external/builtin names and known possible earlier definitions (including
 definitions found in sourced files). Its warning deliberately says that the
 call precedes the definition and qualifies the advice with "if this call
 should use it". Dynamic source/eval or external commands can supply an earlier
-binding: this is not a claim to prove command-not-found. This distinction is
-necessary for the real `mpivis`, whose preceding configuration loader uses
-eval. The existing stronger postdominator message/level and the earlier
+binding: this is not a claim to prove command-not-found. The existing stronger
+postdominator message/level and the
 old-fgl unreachable-node repair remain unchanged.
 
 ## SC2349: IRIX EXIT action reads a departing local
@@ -38,7 +38,7 @@ old-fgl unreachable-node repair remain unchanged.
 For `irix-sh` and `irix-ksh`, warn at an explicit function-local `exit` when a
 definite local declaration and a statically established EXIT/0 action overlap:
 the delayed action may read an outer or unset value after the local disappears.
-This follows the retained native IRIX 6.5.30 file/stdin/command-string tests.
+This follows native IRIX 6.5.30 file/stdin/command-string behaviour.
 
 The check accounts for literal actions and available, uniquely defined cleanup
 helpers, including bounded transitive calls; assignments in those actions or
@@ -52,7 +52,7 @@ also disables this proof. Natural script termination, implicit errexit and
 arbitrary call chains remain outside its deliberately bounded coverage.
 
 The separate opt-in SC2354 now covers bounded ordinary-function return and
-proven nested explicit-exit calls; see `doc/backlog-diagnostics.md`. Native
+proven nested explicit-exit calls; see [additional checks](additional-checks.md). Native
 IRIX sh/ksh tests show that implicit errexit retains the local value in the
 tested cases even though explicit exit loses it. SC2349 has therefore NOT
 been generalized to implicit failures, and neither new case changes profile
@@ -66,7 +66,8 @@ There is no autofix: double-quoting a trap can change expansion timing and
 semantics. No warning is generalized to Bash or IRIX's older bsh/jsh language.
 
 Regression coverage includes positive/negative source matrices in Analytics,
-`test-deferred-diagnostics`, `test-native-exit-trap-scope` (60 native contracts),
-and the existing full property and profile suites.
-Broader before/after host diagnostic comparisons are regression evidence, not
-native MIPSpro compiler qualification.
+[CLI contracts](../builders/irix/test-deferred-diagnostics),
+[native EXIT/local tests](../builders/irix/test-native-exit-trap-scope), and
+the existing property and profile suites. Runtime tests require a private
+writable output directory and an unprivileged IRIX account, not a specific
+username. The language checks are distinct from qualifying a compiler build.

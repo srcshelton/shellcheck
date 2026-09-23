@@ -24,7 +24,7 @@ for name in crtbegin.o crtend.o; do
     printf 'mock %s\n' "$name" > "$candidate/compiler-config/gcc-runtime/$name"
     cksum "$candidate/compiler-config/gcc-runtime/$name" | awk '{print $1 " " $2}' > "$candidate/compiler-config/gcc-runtime/$name.cksum"
 done
-cp "$here/native-consumer-profile" "$candidate/harness/"
+cp "$here/native-consumer-profile" "$here/native-run-root" "$candidate/harness/"
 test_compressor=$(command -v gzip)
 # Only compiler executable paths are substituted in this isolated test copy.
 sed -e 's|^compiler=/bin/cc$|compiler="$FAKE_CC"|' \
@@ -96,7 +96,7 @@ for spec in r4k:mips3:r4000 r5k:mips4:r5000 r10k:mips4:r10000 r12k:mips4:r12000 
     variant_dir="$fixture/shellcheck-native-mipspro-$variant"
     mkdir -p "$variant_dir/compiler-config" "$variant_dir/harness"
     cp "$candidate/compiler-config/compiler.defaults" "$variant_dir/compiler-config/"
-    cp "$here/native-consumer-profile" "$here/mipspro-target-profile" "$variant_dir/harness/"
+    cp "$here/native-consumer-profile" "$here/native-run-root" "$here/mipspro-target-profile" "$variant_dir/harness/"
     cp "$adapter" "$variant_dir/harness/native-mipspro-cc"
     printf 'irix-%s-%s-n32-mipspro744m-ghc7103-O2-v1\n' "$isa" "$cpu" > "$variant_dir/build-profile"
     bash "$variant_dir/harness/native-mipspro-cc" -c "-$isa" "$fixture/input space.c"

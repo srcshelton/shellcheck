@@ -1,7 +1,51 @@
-[![Build Status](https://github.com/koalaman/shellcheck/actions/workflows/build.yml/badge.svg)](https://github.com/koalaman/shellcheck/actions/workflows/build.yml)
+[![Build Status](https://github.com/srcshelton/shellcheck/actions/workflows/build.yml/badge.svg?branch=irix-sh)](https://github.com/srcshelton/shellcheck/actions/workflows/build.yml)
 
 
 # ShellCheck - A shell script static analysis tool
+
+## About this fork
+
+This is [srcshelton/shellcheck](https://github.com/srcshelton/shellcheck), a fork
+of [koalaman/ShellCheck](https://github.com/koalaman/shellcheck). It has two
+complementary aims:
+
+* Corrections and additions intended to benefit users of the generally
+  supported shells, including improved diagnostics and optional analysis/style
+  checks. See [FIXES.md](FIXES.md), the [additional checks](doc/additional-checks.md)
+  and [CHANGELOG.md](CHANGELOG.md) for behaviour, scope and release status.
+* Explicit profiles for IRIX's `sh`, `ksh`, `bsh`, `jsh` and CDE `dtksh`, plus
+  an experimental [native IRIX build](builders/irix/README.md). These are
+  separate capabilities: you can check an IRIX script on Linux, macOS or any
+  other supported host without building or installing anything on IRIX.
+
+The normal build, CLI and general-purpose shell profiles remain available.
+IRIX-specific language rules and profile defaults apply only when an IRIX
+profile is selected, explicitly or by a recognised IRIX shebang. Generic `sh`
+is not silently changed to IRIX sh: `--sh-variant=irix-sh` is an explicit
+choice. Building the legacy native toolchain requires the opt-in
+`irix-legacy-ghc` Cabal flag. Neither IRIX build machinery nor proprietary
+IRIX/MIPSpro software is required for ordinary use.
+
+General diagnostic corrections can change findings on other platforms;
+optional checks remain opt-in as documented. IRIX support is not intended to
+change the meaning of Bash, POSIX sh or other existing profiles.
+
+Use this fork's [releases](https://github.com/srcshelton/shellcheck/releases)
+for binaries containing these additions, and its
+[issue tracker](https://github.com/srcshelton/shellcheck/issues) for fork-specific
+problems. A numbered release contains only the changes recorded for that
+release; `Unreleased` entries describe newer source. The upstream website,
+distribution packages and upstream downloads below do not necessarily contain
+this fork's additions. In particular, the online checker cannot be used to
+validate fork-only profiles or diagnostics.
+
+For example:
+
+```sh
+shellcheck --shell=bash script.bash
+shellcheck --shell=irix-sh script.sh
+shellcheck --enable=check-filename-streams script.sh
+```
 
 ShellCheck is a GPLv3 tool that gives warnings and suggestions for bash/sh shell scripts:
 
@@ -22,6 +66,7 @@ See [the gallery of bad code](README.md#user-content-gallery-of-bad-code) for ex
 
 ## Table of Contents
 
+* [About this fork](#about-this-fork)
 * [How to use](#how-to-use)
   * [On the web](#on-the-web)
   * [From your terminal](#from-your-terminal)
@@ -57,7 +102,8 @@ There are a number of ways to use ShellCheck!
 
 Paste a shell script on <https://www.shellcheck.net> for instant feedback.
 
-[ShellCheck.net](https://www.shellcheck.net) is always synchronized to the latest git commit, and is the easiest way to give ShellCheck a go. Tell your friends!
+[ShellCheck.net](https://www.shellcheck.net) runs upstream ShellCheck, not this
+fork. Use a locally built or downloaded fork binary for the additions above.
 
 ### From your terminal
 
@@ -235,7 +281,8 @@ Using the [Flox package manager](https://flox.dev/)
 flox install shellcheck
 ```
 
-Alternatively, you can download pre-compiled binaries for the latest release here:
+For this fork, use its [release downloads](https://github.com/srcshelton/shellcheck/releases).
+The following links are upstream binaries, without a guarantee of fork features:
 
 * [Linux, x86_64](https://github.com/koalaman/shellcheck/releases/download/stable/shellcheck-stable.linux.x86_64.tar.xz) (statically linked)
 * [Linux, armv6hf](https://github.com/koalaman/shellcheck/releases/download/stable/shellcheck-stable.linux.armv6hf.tar.xz), i.e. Raspberry Pi (statically linked)
@@ -246,9 +293,6 @@ Alternatively, you can download pre-compiled binaries for the latest release her
 
 or see the [GitHub Releases](https://github.com/koalaman/shellcheck/releases) for other releases
 (including the [latest](https://github.com/koalaman/shellcheck/releases/tag/latest) meta-release for daily git builds).
-
-There are currently no official binaries for Apple Silicon, but third party builds are available via
-[ShellCheck for Visual Studio Code](https://github.com/vscode-shellcheck/shellcheck-binaries/releases).
 
 Distro packages already come with a `man` page. If you are building from source, it can be installed with:
 
@@ -537,13 +581,15 @@ Issues can be ignored via environmental variable, command line, individually or 
 
 ## Reporting bugs
 
-Please use the GitHub issue tracker for any bugs or feature suggestions:
-
-<https://github.com/koalaman/shellcheck/issues>
+Please report bugs or feature suggestions for this fork in its
+[issue tracker](https://github.com/srcshelton/shellcheck/issues), including the
+version, selected shell profile and a minimal reproducer. The upstream online
+checker does not include this fork's additions.
 
 ## Contributing
 
-Please submit patches to code or documentation as GitHub pull requests! Check
+Please submit patches to this fork as GitHub pull requests. Generally applicable
+changes are also candidates for contribution upstream. Check
 out the [DevGuide](https://github.com/koalaman/shellcheck/wiki/DevGuide) on the
 ShellCheck Wiki.
 

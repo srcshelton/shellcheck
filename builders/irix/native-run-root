@@ -1,0 +1,29 @@
+# Shared, side-effect-free validation before any native build directory writes.
+# shellcheck shell=bash
+# shellcheck disable=SC2034 # run_root is also consumed by the sourcing driver.
+irix_validate_run_root() {
+    local resolved
+    run_root=${IRIX_RUN_ROOT-/var/tmp/haskell-ghc-irix-experiment}
+    case "$run_root" in
+        /*) ;;
+        *) echo 'IRIX_RUN_ROOT must be a nonempty absolute path' >&2; return 2 ;;
+    esac
+    # Manifest fields are whitespace-delimited. Reject shell metacharacters too;
+    # do not silently normalize paths already used in immutable receipts.
+    case "$run_root/" in
+        *[!a-zA-Z0-9_./-]*|*'//'*|*'/./'*|*'/../'*)
+            echo 'IRIX_RUN_ROOT must use simple path components, without trailing /, whitespace or dot traversal' >&2
+            return 2 ;;
+    esac
+    if [ "$run_root" = "${HOME-}" ] || [ ! -d "$run_root" ] ||
+       [ ! -O "$run_root" ] || [ ! -w "$run_root" ] || [ ! -x "$run_root" ]; then
+        echo 'IRIX_RUN_ROOT must be an existing, owned, writable build directory, not your home directory' >&2
+        return 2
+    fi
+    resolved=$(cd -P -- "$run_root" && pwd -P) || return 2
+    if [ "$resolved" != "$run_root" ]; then
+        echo 'IRIX_RUN_ROOT must use its physical path, without symlink aliases' >&2
+        return 2
+    fi
+    export IRIX_RUN_ROOT="$run_root"
+}

@@ -54,7 +54,10 @@ jobs:
           # Embed the exact git description even for stable fork tags so
           # --version retains suffixes such as "-irix.4" in every binary.
           ./setgitversion
+          git rev-parse HEAD > source/source-commit
+          git describe --always > source/source-version
           cabal sdist
+          python3 test/release-hygiene dist-newstyle/sdist/ShellCheck-*.tar.gz
           mv dist-newstyle/sdist/*.tar.gz source/source.tar.gz
 
       - name: Upload artifact
@@ -146,6 +149,8 @@ jobs:
       - name: Package binaries
         run: |
           export TAGS="$(cat source/tags)"
+          export SOURCE_REVISION="$(cat source/source-commit)"
+          export SOURCE_VERSION="$(cat source/source-version)"
           mkdir -p deploy
           cp -r *.bin/* deploy
           cd deploy

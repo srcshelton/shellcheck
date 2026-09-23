@@ -8,8 +8,9 @@ assignees: ''
 ---
 
 #### For new checks and feature suggestions
-- [ ] https://www.shellcheck.net/ (i.e. the latest commit) currently gives no useful warnings about this
-- [ ] I searched through https://github.com/koalaman/shellcheck/issues and didn't find anything related
+- [ ] I checked the current fork's documented diagnostics and optional checks
+- [ ] I searched https://github.com/srcshelton/shellcheck/issues and checked for related upstream issues at https://github.com/koalaman/shellcheck/issues
+- The online checker at https://www.shellcheck.net/ runs upstream, not this fork.
 
 #### Here's a snippet or screenshot that shows a potential problem:
 

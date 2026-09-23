@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Host contracts for validation; no IRIX compiler or native build is run."""
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+import unittest
+
+HERE = Path(__file__).resolve().parent
+
+
+class RunRootTests(unittest.TestCase):
+    def setUp(self):
+        self.scratch = tempfile.TemporaryDirectory(
+            prefix="run-root-", dir=os.environ["IRIX_TEST_PARENT"])
+        self.addCleanup(self.scratch.cleanup)
+        self.root = Path(self.scratch.name).resolve()
+        self.env = dict(os.environ, IRIX_CONSUMER_PROFILE="functional")
+        self.env.pop("IRIX_MIPSPRO_TARGET", None)
+
+    def probe(self, path, driver="native-run-root", command="irix_validate_run_root"):
+        return subprocess.run(
+            ["/bin/bash", "-c", 'source "$1"; ' + command, "test", str(HERE / driver)],
+            env=dict(self.env, IRIX_RUN_ROOT=str(path)), capture_output=True, text=True)
+
+    def test_valid_root_is_exported_unchanged_without_writes(self):
+        result = self.probe(self.root, command='irix_validate_run_root && printf "%s" "$IRIX_RUN_ROOT"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, str(self.root))
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_unsafe_roots_are_rejected_before_entry_point_writes(self):
+        paths = ["", "/", "relative", str(self.root) + "/", str(self.root) + "//child",
+                 str(self.root) + "/.", str(self.root) + "/..", str(self.root) + "/../child",
+                 str(self.root) + "/./child", str(self.root) + "/not-created", os.environ["HOME"],
+                 str(self.root) + "/has space", str(self.root) + "/line\nbreak",
+                 str(self.root) + "/tab\there", str(self.root) + "/semi;colon",
+                 str(self.root) + "/dollar$sign", str(self.root) + "/back\\slash"]
+        (self.root / "file").write_text("not a directory\n")
+        paths.append(str(self.root / "file"))
+        for path in paths:
+            for driver, command in [("native-run-root", "irix_validate_run_root"),
+                                    ("native-consumer-profile", ":"),
+                                    ("native-compiler-selection", "selection_main --select mipspro")]:
+                with self.subTest(path=path, driver=driver):
+                    result = self.probe(path, driver, command)
+                    self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertEqual(sorted(p.name for p in self.root.iterdir()), ["file"])
+
+    def test_symlink_alias_is_rejected(self):
+        actual = self.root / "actual"
+        actual.mkdir()
+        alias = self.root / "alias"
+        alias.symlink_to(actual, target_is_directory=True)
+        self.assertEqual(self.probe(alias).returncode, 2)
+        self.assertEqual(self.probe(actual).returncode, 0)
+
+    def test_foreign_owned_root_is_rejected(self):
+        if Path("/usr").stat().st_uid == os.geteuid():
+            self.skipTest("no foreign-owned fixture available")
+        self.assertEqual(self.probe("/usr").returncode, 2)
+
+    def test_consumer_scratch_is_inside_validated_root(self):
+        result = self.probe(self.root, "native-consumer-profile", 'printf "%s" "$TMPDIR"')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout, str(self.root / "shellcheck-native/tmp"))
+        self.assertTrue((self.root / "shellcheck-native/tmp").is_dir())
+
+    def test_scratch_creation_failure_is_propagated(self):
+        result = subprocess.run(
+            ["/bin/bash", "-c", 'mkdir() { return 23; }; source "$1"; exit 0',
+             "test", str(HERE / "native-consumer-profile")],
+            env=dict(self.env, IRIX_RUN_ROOT=str(self.root)), capture_output=True)
+        self.assertEqual(result.returncode, 23)
+
+
+if __name__ == "__main__":
+    unittest.main()

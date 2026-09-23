@@ -1,13 +1,15 @@
-# IRIX Bourne-shell profile evidence
+# IRIX Bourne-shell profiles
 
-`irix-bsh` and `irix-jsh` select the same static language model. On the
-qualified IRIX 6.5.30 Fuel, /bin/bsh and /bin/jsh resolve to /sbin/bsh:
-419948 bytes, POSIX checksum 847508902. The installed bsh(1) manual identifies
-jsh as the job-control invocation of that shell. Native $- is `s` for bsh
-and `ms` for jsh under -c; without a controlling terminal both reject jobs/fg.
-No claim of interactive terminal/job-control qualification is made.
+`irix-bsh` and `irix-jsh` select the same static language model for IRIX's
+older Bourne shell. Select one with `shellcheck --shell=irix-bsh script.sh`
+or `--shell=irix-jsh`; recognised bsh/jsh shebangs select it automatically.
 
-The 2026-09-21 native matrix established:
+On the tested IRIX 6.5.30 installation, `/bin/bsh` and `/bin/jsh` resolve to
+`/sbin/bsh`. The bsh(1) manual identifies jsh as its job-control invocation.
+Job control still requires an appropriate terminal; the profile does not
+validate interactive terminal behaviour.
+
+The supported language differs from modern POSIX sh:
 
 | Accepted | Unsupported or different |
 | --- | --- |
@@ -24,10 +26,11 @@ Korn-language extensions of irix-sh/irix-ksh. The parser accepts the shared
 IRIX brace-case/else-if/test conventions without enabling Korn coprocesses.
 Advice must not replace backticks/read/expr with unsupported POSIX features.
 
-Fourteen focused cases passed in both shells through -c, stdin and standalone
-files (84 native status/output contracts). A further 24 contracts verify that
--nt/-ot/-ef are rejected and -k is accepted in both shells and all three modes.
-Broader read-only native probes
-cover builtins/options and contrast /sbin/sh and /bin/ksh. Source tests cover
-selection, shebangs, file extensions, supported/unsupported syntax, pipeline
-scope and advice; existing dialect tests remain required.
+These boundaries were checked through command strings, stdin and standalone
+files on IRIX 6.5.30. Other IRIX versions should be checked against their own
+shells. In particular, `test -k` is accepted, while `-nt`, `-ot` and `-ef` are not.
+
+From a Git checkout, run `python3 builders/irix/test-bourne-profiles SHELLCHECK`
+against your compiled binary for selection, syntax and diagnostic contracts.
+The [manual](../../shellcheck.1.md) describes profile selection and the separate
+`irix-sh`, `irix-ksh` and `irix-dtksh` profiles.

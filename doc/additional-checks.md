@@ -1,4 +1,4 @@
-# Diagnostic additions
+# Additional diagnostic checks
 
 These changes do not require changes to `# shellcheck` directive syntax.
 The named policy/analysis checks below are opt-in, including for IRIX profiles. Existing
@@ -161,7 +161,7 @@ transfer rules, other trap warnings and profile defaults are unchanged.
 
 ### Why implicit errexit is excluded
 
-The retained runtime matrix exercises natural return, explicit return,
+The runtime test matrix exercises natural return, explicit return,
 errexit, condition-suppressed errexit, nested explicit exit, trap replacement
 and action-local assignment under command-string, file and stdin invocation.
 All functions in this matrix use the ordinary `f()` form.
@@ -184,5 +184,5 @@ recursive programs remain outside the bounded analysis. Silence is not proof
 that cleanup is safe. `test/exit-scope-runtime` reproduces the evidence matrix;
 it records outcomes rather than asserting that all shells must behave alike.
 
-These checks use the existing enable/disable syntax; no `profile=` or
-`feature=` directive is introduced.
+These checks use the existing enable/disable syntax; there is no `profile=`
+or `feature=` directive.

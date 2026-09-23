@@ -5,11 +5,11 @@ License:          GPL-3
 License-file:     LICENSE
 Category:         Static Analysis
 Author:           Vidar Holen
-Maintainer:       vidar@vidarholen.net
-Homepage:         https://www.shellcheck.net/
+Maintainer:       Stuart Shelton <stuart@shelton.me>
+Homepage:         https://github.com/srcshelton/shellcheck
 Build-Type:       Simple
 Cabal-Version:    1.18
-Bug-reports:      https://github.com/koalaman/shellcheck/issues
+Bug-reports:      https://github.com/srcshelton/shellcheck/issues
 Description:
   The goals of ShellCheck are:
   .
@@ -27,7 +27,16 @@ tested-with: GHC == 8.0, GHC == 8.10, GHC == 9.0.1, GHC == 9.4.7, GHC == 9.6.6
 Extra-Doc-Files:
     README.md
     CHANGELOG.md
-    doc/backlog-diagnostics.md
+    FIXES.md
+    doc/additional-checks.md
+    doc/diagnostic-boundaries.md
+    builders/README.md
+    builders/irix/README.md
+    builders/irix/TECHNICAL.md
+    builders/irix/BOURNE-PROFILES.md
+    builders/irix/DTKSH-PROFILE.md
+    builders/irix/RELEASE-SIZE.md
+    builders/linux.armv6hf-cross/README.md
 Extra-Source-Files:
     -- documentation
     shellcheck.1.md
@@ -43,10 +52,11 @@ Extra-Source-Files:
     test/exit-scope.py
     test/exit-scope-runtime
     test/filename-streams-runtime.py
+    test/release-hygiene
 
 source-repository head
     type: git
-    location: https://github.com/koalaman/shellcheck.git
+    location: https://github.com/srcshelton/shellcheck.git
 
 flag dev-mode
     manual: True

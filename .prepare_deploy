@@ -6,21 +6,30 @@ shopt -s nullglob extglob
 ls -l
 
 cp ../LICENSE LICENSE.txt
+source_revision=${SOURCE_REVISION:-$(git rev-parse HEAD)}
+source_version=${SOURCE_VERSION:-$(git describe --always)}
+case "$source_revision" in ''|*[!0-9a-f]*) echo 'Invalid source revision' >&2; exit 2 ;; esac
+test "${#source_revision}" = 40 || { echo 'Expected full source commit ID' >&2; exit 2; }
+case "$source_version" in ''|*[!a-zA-Z0-9_.+-]*) echo 'Invalid source version' >&2; exit 2 ;; esac
 sed -e $'s/$/\r/' > README.txt << END
-This is a precompiled ShellCheck binary.
-      https://www.shellcheck.net/
+This is a precompiled binary from the srcshelton/ShellCheck fork.
+      https://github.com/srcshelton/shellcheck
 
 ShellCheck is a static analysis tool for shell scripts.
 It's licensed under the GNU General Public License v3.0.
-Information and source code is available on the website.
+It includes general diagnostic corrections and additions, optional checks,
+and opt-in IRIX shell profiles. IRIX-specific behaviour does not replace the
+normal general-purpose shell profiles. The upstream online checker may not
+include these additions.
 
-This binary was compiled on $(date -u).
+Source version: $source_version
+Source revision: $source_revision
+Source: https://github.com/srcshelton/shellcheck/tree/$source_revision
+Changes: https://github.com/srcshelton/shellcheck/blob/$source_revision/CHANGELOG.md
+Usage: https://github.com/srcshelton/shellcheck/blob/$source_revision/shellcheck.1.md
+Issues: https://github.com/srcshelton/shellcheck/issues
 
-
-
-      ====== Latest commits ======
-
-$(git log -n 3)
+Upstream ShellCheck: https://github.com/koalaman/shellcheck
 END
 
 for dir in */

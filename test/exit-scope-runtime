@@ -1,8 +1,12 @@
 #!/bin/bash
 # Evidence matrix, not a portability claim. Caller owns the durable parent.
 set -eu
+test "$#" = 1 || { echo 'usage: exit-scope-runtime PRIVATE_OUTPUT_PARENT' >&2; exit 2; }
 parent=$1
-test -d "$parent"
+if [ ! -d "$parent" ] || [ ! -O "$parent" ] || [ ! -w "$parent" ] || [ ! -x "$parent" ]; then
+    echo 'Test parent must be an existing, owned, writable directory' >&2
+    exit 2
+fi
 case "$(uname -s)" in
     IRIX*)
         test "$(id -u)" -ne 0 || { echo 'Run as an unprivileged user' >&2; exit 2; }
@@ -16,6 +20,7 @@ case "$(uname -s)" in
         declaration=local
         ;;
 esac
+umask 077
 fixture="$parent/exit-lifetime-$$"
 mkdir "$fixture"
 for shell in $shells; do
