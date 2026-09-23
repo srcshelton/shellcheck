@@ -1,10 +1,18 @@
 # Experimental native-x86 ARMv6 cross builder
 
 This builder runs GHC natively on Linux x86-64 and produces ARM1176/VFPv2
-hard-float ShellCheck binaries. It is an experimental alternative to the
-[emulated ARMv6 release builder](../linux.armv6hf); the existing release path
-has not been switched. There is no `tag` file, so the standard release helpers
-cannot select this image accidentally.
+hard-float ShellCheck binaries. On the default branch, the ARMv6 CI job waits
+for the qualified image in GHCR; a missing image is built, qualified and
+published before ARMv6 starts. Other architecture jobs do not wait. Pull
+requests and non-default branches can use an existing image or fall back to
+the [emulated builder](../linux.armv6hf), without publishing from untrusted
+source. An available cross image that fails to build ShellCheck is never
+silently replaced by emulation. There is no `tag` file, so the generic
+`run_builder` helper cannot accidentally select this image.
+
+Manual `release_tag` rebuilds always use the existing emulated ARMv6 builder,
+so rebuilding an older tag does not select a cross image keyed to the current
+branch's compiler recipe.
 
 The builder uses crosstool-NG 1.28.0, GHC 9.12.2 and LLVM 19. Its ARMv6 C
 toolchain/sysroot avoids distribution armhf libraries that may require ARMv7.
@@ -43,10 +51,18 @@ alone.
 
 ## Qualification in GitHub Actions
 
-The manual [qualify-armv6-cross workflow](../../.github/workflows/qualify-armv6-cross.yml)
-runs on a native AMD64 Ubuntu runner. It builds the image, packages the exact
-checkout and builds that same source with both the candidate and existing
-release builders.
+The [qualify-armv6-cross workflow](../../.github/workflows/qualify-armv6-cross.yml)
+can be dispatched manually, or called by the standard build workflow on a
+trusted default-branch build. In the automatic case it probes the channel
+calculated by `image-tag`: an existing image is reused, while a missing image
+is built on a native AMD64 Ubuntu runner. It packages the exact checkout and
+builds that same source with both the candidate and existing release builders.
+After every gate passes, it publishes the tested local image to
+`ghcr.io/<owner>/<repo>-armv6-cross`. It pushes a run-specific tag first,
+verifies that the pulled image has the tested image ID, and only then updates
+the consumption channel. The registry digest, channel, full build evidence
+and timings are retained as workflow artifacts. No image is published from a
+pull request or non-default branch.
 
 `ci-contracts` runs the current diagnostic/profile, filename and EXIT suites
 through `ci-compare`, requiring identical exit status, stdout and stderr for
@@ -56,9 +72,34 @@ hard-float/64-bit ABI probes; mock ELF-validator tests do not replace these.
 
 The workflow records separate image and package timings, image identities,
 source checksums, the resolved package plan, ABI results and comparison output.
-BuildKit cache reuse avoids unnecessary recompilation, but a cache is not a
-permanent distributable compiler artifact. A successful current CI run is
-required before publishing/selecting this as a release builder.
+BuildKit cache reuse avoids unnecessary recompilation; GHCR retains the
+qualified image for later CI runs. The ordinary ARMv6 job pulls the channel,
+records its registry digest and local image ID, and builds by that ID, not by a
+potentially changing tag. If default-branch image preparation fails, ARMv6
+does not start; the other architecture jobs continue independently. On pull
+requests and non-default branches, an unavailable image uses emulation.
+
+To refresh the image, update the pinned toolchain recipe and push to the
+default branch. The corresponding build automatically qualifies a new image
+while non-ARMv6 work proceeds. A manual rebuild remains available with
+`gh workflow run qualify-armv6-cross.yml --ref irix-sh` in this fork. A passing
+ordinary build shows which builder and registry digest it actually consumed.
+
+The GHC version and upstream source checksum are pinned in `Dockerfile`.
+`image-tag` includes the pinned version and a digest of the local image recipe,
+so changing either selects a new GHCR channel. An upstream GHC release is not
+itself an automatic trigger. The current image also preinstalls dependencies
+for `ShellCheck-0.11.0`; package-plan changes require an image-recipe update
+and new qualification even when the GHC version is unchanged.
+
+Automatic preparation has operational costs beyond elapsed time: a missing
+image can consume substantial CI minutes and registry/cache storage, and a
+registry outage may cause a needless rebuild before publication fails. GitHub
+hosted jobs have a finite time limit; a failed image qualification leaves the
+ARMv6 job pending/skipped, without delaying the other architecture builds.
+The image recipe key does not pin Debian or Hackage responses, so retain the
+published digest and qualification evidence for exact provenance. Do not grant
+registry write permission to pull-request code merely to avoid emulation.
 
 Target runtime and focused CLI checks have been exercised, but this is not a
 claim of a clean native-AMD64 build or release-wide equivalence. Source archives

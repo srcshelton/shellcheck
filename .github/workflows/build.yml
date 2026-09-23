@@ -100,12 +100,25 @@ jobs:
           cd source
           cabal test ${{ matrix.cabal_flags }}
 
+  ensure_armv6_cross:
+    name: Ensure qualified ARMv6 cross image
+    if: >-
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && inputs.release_tag == '')) &&
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/qualify-armv6-cross.yml
+    with:
+      if_missing: true
+
   build_source:
     name: Build
     needs: package_source
     strategy:
       matrix:
-        build: [linux.x86_64, linux.aarch64, linux.armv6hf, linux.riscv64, darwin.x86_64, darwin.aarch64, windows.x86_64]
+        build: [linux.x86_64, linux.aarch64, linux.riscv64, darwin.x86_64, darwin.aarch64, windows.x86_64]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -129,16 +142,58 @@ jobs:
           name: ${{matrix.build}}.bin
           path: bin/
 
+  build_armv6:
+    name: Build linux.armv6hf
+    needs: [package_source, ensure_armv6_cross]
+    if: >-
+      always() && needs.package_source.result == 'success' &&
+      (needs.ensure_armv6_cross.result == 'success' ||
+       needs.ensure_armv6_cross.result == 'skipped')
+    permissions:
+      contents: read
+      packages: read
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+      - name: Download source artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: source
+          path: source/
+      - name: Build ARMv6 source
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ARMV6_CROSS_REQUIRED: ${{ needs.ensure_armv6_cross.result == 'success' && '1' || '0' }}
+          ARMV6_FORCE_EMULATION: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag != '' && '1' || '0' }}
+        run: |
+          mkdir -p bin
+          ( cd bin && ../builders/linux.armv6hf-cross/run-preferred ../source/source.tar.gz )
+      - name: Upload ARMv6 artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux.armv6hf.bin
+          path: bin/
+
   package_binary:
     name: Package Binaries
-    needs: build_source
+    needs: [build_source, build_armv6]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
 
-      - name: Download artifacts
+      - name: Download source metadata
         uses: actions/download-artifact@v8
+        with:
+          name: source
+          path: source/
+
+      - name: Download binary artifacts
+        uses: actions/download-artifact@v8
+        with:
+          pattern: '*.bin'
+          merge-multiple: false
 
       - name: List files for debugging
         run: find .

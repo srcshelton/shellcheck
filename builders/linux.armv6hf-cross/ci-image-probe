@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Probe the versioned GHCR image before deciding whether to build GHC.
+set -euo pipefail
+test "$#" -eq 1 || { echo 'usage: ci-image-probe EVIDENCE_OUTPUT' >&2; exit 2; }
+repo=$(cd "$(dirname "$0")/../.." && pwd)
+out=$1
+mkdir -p "$out"
+out=$(realpath "$out")
+test -n "${GITHUB_REPOSITORY:-}"
+test -n "${GITHUB_ACTOR:-}"
+test -n "${GHCR_TOKEN:-}"
+test -n "${GITHUB_OUTPUT:-}"
+channel=$("$repo/builders/linux.armv6hf-cross/image-tag")
+repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+image="ghcr.io/$repository-armv6-cross:$channel"
+printf '%s\n' "$image" > "$out/requested-image"
+printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+if docker manifest inspect "$image" > "$out/existing-manifest.json" 2> "$out/image-probe.log"; then
+    printf 'available=true\n' >> "$GITHUB_OUTPUT"
+    printf 'PRESENT %s\n' "$image" > "$out/image-probe-status"
+else
+    printf 'available=false\n' >> "$GITHUB_OUTPUT"
+    printf 'MISSING_OR_UNAVAILABLE %s\n' "$image" > "$out/image-probe-status"
+    echo "ARMv6 image not available; qualifying a new image: $image" >&2
+fi

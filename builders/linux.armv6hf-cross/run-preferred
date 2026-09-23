@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Use the qualified native-x86 cross builder when published; otherwise emulate.
+set -euo pipefail
+test "$#" -eq 1 || { echo 'usage: run-preferred SDIST' >&2; exit 2; }
+repo=$(cd "$(dirname "$0")/../.." && pwd)
+source_archive=$(realpath "$1")
+test -s "$source_archive"
+run_emulated() {
+    "$repo/builders/run_builder" "$source_archive" "$repo/builders/linux.armv6hf"
+    test -s linux.armv6hf/shellcheck
+}
+if [[ ${ARMV6_FORCE_EMULATION:-0} = 1 ]]; then
+    echo 'ARMv6 builder: emulated for manual tagged release rebuild' >&2
+    run_emulated
+    exit 0
+fi
+channel=$("$repo/builders/linux.armv6hf-cross/image-tag")
+repository=$(printf '%s' "${GITHUB_REPOSITORY:-srcshelton/shellcheck}" | tr '[:upper:]' '[:lower:]')
+image="ghcr.io/$repository-armv6-cross:$channel"
+image_repository=${image%:*}
+
+if [[ -n ${GHCR_TOKEN:-} && -n ${GITHUB_ACTOR:-} ]]; then
+    if ! printf '%s' "$GHCR_TOKEN" | docker login ghcr.io \
+        --username "$GITHUB_ACTOR" --password-stdin >/dev/null; then
+        echo 'GHCR authentication failed; attempting an anonymous image pull' >&2
+    fi
+fi
+
+if docker pull --platform linux/amd64 "$image"; then
+    image_id=$(docker image inspect "$image" --format '{{.Id}}')
+    case "$image_id" in sha256:*) ;; *) echo 'Invalid cross-image ID' >&2; exit 1 ;; esac
+    image_digest=$(docker image inspect "$image" --format '{{index .RepoDigests 0}}')
+    case "$image_digest" in "$image_repository"@sha256:*) ;; *) echo 'Missing cross-image digest' >&2; exit 1 ;; esac
+    echo "ARMv6 builder: qualified cross-GHC $image_digest ($image_id)" >&2
+    if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+        # Markdown backticks are literal; substitutions use printf arguments.
+        # shellcheck disable=SC2016
+        printf 'ARMv6 builder: cross-GHC `%s` (`%s`)\n' "$image_digest" "$image_id" >> "$GITHUB_STEP_SUMMARY"
+    fi
+    docker run --platform linux/amd64 -i "$image_id" < "$source_archive" | tar xz
+else
+    if [[ ${ARMV6_CROSS_REQUIRED:-0} = 1 ]]; then
+        echo "Required qualified ARMv6 image could not be pulled: $image" >&2
+        exit 1
+    fi
+    echo "ARMv6 cross image unavailable: $image; using the emulated builder" >&2
+    if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+        # shellcheck disable=SC2016
+        printf 'ARMv6 builder: emulated fallback; cross image `%s` unavailable\n' "$image" >> "$GITHUB_STEP_SUMMARY"
+    fi
+    run_emulated
+fi
+test -s linux.armv6hf/shellcheck

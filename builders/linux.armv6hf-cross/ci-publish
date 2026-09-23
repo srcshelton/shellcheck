@@ -1,0 +1,53 @@
+#!/usr/bin/env bash
+# Publish only the local image that passed ci-qualify in this workflow run.
+set -euo pipefail
+test "$#" -eq 1 || { echo 'usage: ci-publish EVIDENCE_OUTPUT' >&2; exit 2; }
+repo=$(cd "$(dirname "$0")/../.." && pwd)
+out=$(realpath "$1")
+test "$(< "$out/status")" = 0
+test -s "$out/comparison.jsonl"
+test -s "$out/candidate.sha256"
+test -s "$out/reference.sha256"
+test -s "$out/candidate-container.json"
+python3 - "$out/comparison.jsonl" <<'PY'
+import json
+from pathlib import Path
+import sys
+rows = [json.loads(line) for line in Path(sys.argv[1]).read_text().splitlines()]
+assert rows and all(row.get('equal') is True for row in rows)
+PY
+test -n "${GITHUB_REPOSITORY:-}"
+test -n "${GITHUB_RUN_ID:-}"
+test -n "${GITHUB_RUN_ATTEMPT:-}"
+test -n "${GITHUB_ACTOR:-}"
+test -n "${GHCR_TOKEN:-}"
+channel=$("$repo/builders/linux.armv6hf-cross/image-tag")
+repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
+image="ghcr.io/$repository-armv6-cross"
+run_tag="$channel-run-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT"
+tested_id=$(docker image inspect shellcheck-armv6-cross:qualification --format '{{.Id}}')
+case "$tested_id" in sha256:*) ;; *) echo 'Invalid tested image ID' >&2; exit 1 ;; esac
+qualified_id=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[0]["Image"])' \
+    "$out/candidate-container.json")
+test "$tested_id" = "$qualified_id"
+printf '%s' "$GHCR_TOKEN" | docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+docker tag "$tested_id" "$image:$run_tag"
+docker push "$image:$run_tag" | tee "$out/push-run.log"
+docker pull "$image:$run_tag"
+test "$(docker image inspect "$image:$run_tag" --format '{{.Id}}')" = "$tested_id"
+digest_ref=$(docker image inspect "$image:$run_tag" --format '{{index .RepoDigests 0}}')
+case "$digest_ref" in "$image"@sha256:*) ;; *) echo 'Missing published image digest' >&2; exit 1 ;; esac
+printf '%s\n' "$digest_ref" > "$out/published-image-digest"
+
+# Update the consumption channel only after the run-specific image round-trip.
+docker tag "$tested_id" "$image:$channel"
+docker push "$image:$channel" | tee "$out/push-channel.log"
+docker pull "$image:$channel"
+test "$(docker image inspect "$image:$channel" --format '{{.Id}}')" = "$tested_id"
+printf '%s\n' "$image:$channel" > "$out/published-image-channel"
+if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+    # Markdown backticks are literal; substitutions use printf arguments.
+    # shellcheck disable=SC2016
+    printf 'Qualified cross-GHC image: `%s`\n\nPublished digest: `%s`\n' \
+        "$image:$channel" "$digest_ref" >> "$GITHUB_STEP_SUMMARY"
+fi

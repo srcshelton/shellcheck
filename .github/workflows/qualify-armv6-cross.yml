@@ -1,37 +1,56 @@
-name: Qualify native-x86 ARMv6 builder
+name: Qualify and publish native-x86 ARMv6 builder
 
 on:
   workflow_dispatch:
-
-permissions:
-  contents: read
+  workflow_call:
+    inputs:
+      if_missing:
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: armv6-cross-${{ github.ref }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   qualify:
     runs-on: ubuntu-24.04
     timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: Check whether the pinned image already exists
+        id: existing
+        if: inputs.if_missing == true
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash builders/linux.armv6hf-cross/ci-image-probe evidence
       - name: Check native host and disk headroom
+        if: inputs.if_missing != true || steps.existing.outputs.available != 'true'
         run: |
           test "$RUNNER_ARCH" = X64
           test "$(uname -m)" = x86_64
           test "$(df -Pk . | awk 'NR == 2 {print $4}')" -ge 20971520
-          mkdir evidence
+          mkdir -p evidence
           git rev-parse HEAD > evidence/source-commit
           date -u +%FT%TZ > evidence/started
           lscpu > evidence/host-cpu.txt
           free -m > evidence/host-memory.txt
           df -Pk . > evidence/disk-before.txt
+      - name: Check registry-selection and publish guards
+        if: inputs.if_missing != true || steps.existing.outputs.available != 'true'
+        run: python3 builders/linux.armv6hf-cross/test-ci-selection.py
       - uses: docker/setup-buildx-action@v4
+        if: inputs.if_missing != true || steps.existing.outputs.available != 'true'
       - name: Build and qualify the C toolchain and cross-GHC
         id: image
+        if: inputs.if_missing != true || steps.existing.outputs.available != 'true'
         timeout-minutes: 270
         uses: docker/build-push-action@v7
         with:
@@ -39,9 +58,11 @@ jobs:
           platforms: linux/amd64
           load: true
           tags: shellcheck-armv6-cross:qualification
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha,scope=armv6-cross
           cache-to: type=gha,scope=armv6-cross,mode=max
       - name: Capture builder identity
+        if: inputs.if_missing != true || steps.existing.outputs.available != 'true'
         env:
           BUILD_METADATA: ${{ steps.image.outputs.metadata }}
         run: |
@@ -49,6 +70,7 @@ jobs:
           printf '%s\n' "$BUILD_METADATA" > evidence/build-metadata.json
           docker image inspect shellcheck-armv6-cross:qualification > evidence/image.json
       - name: Package the exact checked-out source
+        if: inputs.if_missing != true || steps.existing.outputs.available != 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y cabal-install
@@ -58,8 +80,16 @@ jobs:
           cp dist-newstyle/sdist/ShellCheck-*.tar.gz evidence/source.tar.gz
           sha256sum evidence/source.tar.gz > evidence/source.sha256
       - name: Build old and new ARMv6 binaries and compare contracts
+        if: inputs.if_missing != true || steps.existing.outputs.available != 'true'
         timeout-minutes: 65
         run: bash builders/linux.armv6hf-cross/ci-qualify evidence/source.tar.gz evidence
+      - name: Publish qualified cross-GHC builder to GHCR
+        if: >-
+          (inputs.if_missing != true || steps.existing.outputs.available != 'true') &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+        env:
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash builders/linux.armv6hf-cross/ci-publish evidence
       - name: Capture final timing and disk use
         if: always()
         run: |
