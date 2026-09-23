@@ -43,7 +43,7 @@ enablement unless a shell profile documents otherwise.
   supported pipelines, saved files, substitutions, read loops and bounded
   function wrappers. Unknown transformations end tracking.
 * Optional SC2354 (`check-exit-trap-scope`) detects bounded EXIT-action/local
-  lifetime risks after function return and nested explicit exits on IRIX.
+  lifetime risks after function return and, on IRIX, nested explicit exits.
 
 See [additional checks](doc/additional-checks.md) and
 [diagnostic boundaries](doc/diagnostic-boundaries.md) for examples and limits.

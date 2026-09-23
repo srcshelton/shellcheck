@@ -20,10 +20,11 @@ complementary aims:
 
 The normal build, CLI and general-purpose shell profiles remain available.
 IRIX-specific language rules and profile defaults apply only when an IRIX
-profile is selected, explicitly or by a recognised IRIX shebang. Generic `sh`
-is not silently changed to IRIX sh: `--sh-variant=irix-sh` is an explicit
-choice. Building the legacy native toolchain requires the opt-in
-`irix-legacy-ghc` Cabal flag. Neither IRIX build machinery nor proprietary
+profile is selected, explicitly or by recognised IRIX shebangs or filename
+extensions. Generic `sh` is not silently changed to IRIX sh:
+`--sh-variant=irix-sh` is an explicit choice. Building ShellCheck with the
+legacy native GHC requires the opt-in `irix-legacy-ghc` Cabal flag.
+Neither IRIX build machinery nor proprietary
 IRIX/MIPSpro software is required for ordinary use.
 
 General diagnostic corrections can change findings on other platforms;
