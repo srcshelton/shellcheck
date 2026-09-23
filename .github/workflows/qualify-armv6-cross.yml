@@ -1,0 +1,75 @@
+name: Qualify native-x86 ARMv6 builder
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: armv6-cross-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Check native host and disk headroom
+        run: |
+          test "$RUNNER_ARCH" = X64
+          test "$(uname -m)" = x86_64
+          test "$(df -Pk . | awk 'NR == 2 {print $4}')" -ge 20971520
+          mkdir evidence
+          git rev-parse HEAD > evidence/source-commit
+          date -u +%FT%TZ > evidence/started
+          lscpu > evidence/host-cpu.txt
+          free -m > evidence/host-memory.txt
+          df -Pk . > evidence/disk-before.txt
+      - uses: docker/setup-buildx-action@v4
+      - name: Build and qualify the C toolchain and cross-GHC
+        id: image
+        timeout-minutes: 270
+        uses: docker/build-push-action@v7
+        with:
+          context: builders/linux.armv6hf-cross
+          platforms: linux/amd64
+          load: true
+          tags: shellcheck-armv6-cross:qualification
+          cache-from: type=gha,scope=armv6-cross
+          cache-to: type=gha,scope=armv6-cross,mode=max
+      - name: Capture builder identity
+        env:
+          BUILD_METADATA: ${{ steps.image.outputs.metadata }}
+        run: |
+          date -u +%FT%TZ > evidence/image-completed
+          printf '%s\n' "$BUILD_METADATA" > evidence/build-metadata.json
+          docker image inspect shellcheck-armv6-cross:qualification > evidence/image.json
+      - name: Package the exact checked-out source
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cabal-install
+          ./setgitversion
+          cabal sdist
+          cp dist-newstyle/sdist/ShellCheck-*.tar.gz evidence/source.tar.gz
+          sha256sum evidence/source.tar.gz > evidence/source.sha256
+      - name: Build old and new ARMv6 binaries and compare contracts
+        timeout-minutes: 65
+        run: bash builders/linux.armv6hf-cross/ci-qualify evidence/source.tar.gz evidence
+      - name: Capture final timing and disk use
+        if: always()
+        run: |
+          mkdir -p evidence
+          date -u +%FT%TZ > evidence/ended
+          df -Pk . > evidence/disk-after.txt
+      - name: Retain binaries, plans, comparison output and timings
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: armv6-cross-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30

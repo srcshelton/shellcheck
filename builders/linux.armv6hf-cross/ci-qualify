@@ -1,0 +1,57 @@
+#!/bin/bash
+# Native AMD64 CI qualification, not a release/tag change.
+set -euo pipefail
+test "$#" = 2 || { echo 'usage: ci-qualify SDIST EMPTY_EVIDENCE_OUTPUT' >&2; exit 2; }
+repo=$(cd "$(dirname "$0")/../.." && pwd)
+source_archive=$(realpath "$1")
+out=$(realpath "$2")
+test "$(uname -m)" = x86_64
+test "$(df -Pk "$out" | awk 'NR == 2 {print $4}')" -ge 10485760
+image=shellcheck-armv6-cross:qualification
+prefix="shellcheck-armv6-${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}-$$"
+containers=()
+cleanup() {
+    result=$?
+    trap - EXIT
+    for container in "${containers[@]}"; do docker rm "$container" >/dev/null || true; done
+    printf '%s\n' "$result" > "$out/status"
+    exit "$result"
+}
+trap cleanup EXIT
+reference=$(< "$repo/builders/linux.armv6hf/tag")
+docker pull "$reference"
+docker image inspect "$reference" > "$out/reference-image.json"
+reference=$(docker image inspect "$reference" --format '{{.Id}}')
+image=$(docker image inspect "$image" --format '{{.Id}}')
+for kind in candidate reference; do
+    selected=$image
+    if [ "$kind" = reference ]; then selected=$reference; fi
+    name="$prefix-$kind"
+    containers+=("$name")
+    test ! -e "$out/$kind"
+    mkdir "$out/$kind"
+    /usr/bin/time -v -o "$out/$kind-time.txt" \
+        docker run --platform linux/amd64 -i --name "$name" "$selected" \
+        < "$source_archive" > "$out/$kind.tar.gz" 2> "$out/$kind-build.log"
+    docker inspect "$name" > "$out/$kind-container.json"
+    tar tzf "$out/$kind.tar.gz" > "$out/$kind-members.txt"
+    # Restrict paths before extracting any builder output.
+    while IFS= read -r member; do
+        case "$member" in linux.armv6hf/|linux.armv6hf/shellcheck) ;;
+            *) echo "Unexpected member: $member" >&2; exit 2 ;; esac
+    done < "$out/$kind-members.txt"
+    tar xzf "$out/$kind.tar.gz" -C "$out/$kind"
+    test -s "$out/$kind/linux.armv6hf/shellcheck"
+    sha256sum "$out/$kind/linux.armv6hf/shellcheck" > "$out/$kind.sha256"
+    if [ "$kind" = candidate ]; then
+        docker cp "$name:/scratch/source/dist-newstyle/cache/plan.json" "$out/package-plan.json"
+        docker cp "$name:/qualification" "$out/toolchain-qualification"
+    fi
+done
+/usr/bin/time -v -o "$out/contracts-time.txt" \
+    docker run --rm --platform linux/amd64 --network none \
+    --mount "type=bind,src=$repo,dst=/repo,readonly" \
+    --mount "type=bind,src=$out,dst=/evidence" \
+    --entrypoint /bin/bash "$image" /repo/builders/linux.armv6hf-cross/ci-contracts \
+    > "$out/contracts.log" 2>&1
+printf 'PASS native-AMD64 ARMv6 qualification\n'

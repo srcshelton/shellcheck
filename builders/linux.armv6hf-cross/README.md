@@ -37,9 +37,26 @@ The build driver additionally gates static ELF32 ARMv6 attributes, a clean
 script and an expected SC2086 finding after stripping. These small gates are
 necessary but do not substitute for full old/new semantic comparison.
 
-Only after successful full builds, comparison, dependency/provenance locking
-and measured improvement may the release tag be changed. Existing frozen IRIX
-inputs and the IRIX GHC ladder are unrelated and must remain untouched.
+## Native AMD64 CI integration
+
+The manual `qualify-armv6-cross.yml` workflow builds this image on Ubuntu x86-64,
+then builds this checkout's exact sdist with both this builder and the existing
+emulated ARMv6 release builder. `ci-contracts` runs all current diagnostic/profile,
+filename and EXIT CLI suites through `ci-compare`, which requires byte-identical
+status/stdout/stderr on ARM1176. A mismatch retains its input and both outputs.
+This includes newer tests beyond the frozen local 644-contract qualification.
+
+The job captures separate image-completion and old/new package-build timings,
+image identities, current sdist checksum, actual Cabal package plan, ABI evidence,
+binaries and comparisons. Cached image builds and cold compiler builds are not
+conflated with the timed package builds. BuildKit caching avoids rebuilding
+unchanged expensive layers; there is no refresh timer or claim that a cache is
+permanent. Public run artifacts retain the actual qualification output.
+
+A passing native AMD64 CI qualification and timing run is required
+before choosing/publishing a reusable release builder and updating its tag.
+The normal release workflow remains on the old builder meanwhile. Distribution
+packages/Hackage resolution are captured, not yet a fully reproducible lock.
 
 Primary source references:
 

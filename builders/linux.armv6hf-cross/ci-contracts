@@ -1,0 +1,20 @@
+#!/bin/bash
+set -euo pipefail
+cd /repo
+validate-elf /evidence/candidate/linux.armv6hf/shellcheck
+validate-elf /evidence/reference/linux.armv6hf/shellcheck
+export ARMV6_COMPARISON_LOG=/evidence/comparison.jsonl
+test ! -e "$ARMV6_COMPARISON_LOG"
+for suite in test/backlog-diagnostics.py test/filename-streams.py \
+    test/filename-flow.py test/exit-scope.py \
+    builders/irix/test-deferred-diagnostics builders/irix/test-bourne-profiles \
+    builders/irix/test-xpg-mode builders/irix/test-ksh-then builders/irix/test-dtksh-profile; do
+    python3 "$suite" /repo/builders/linux.armv6hf-cross/ci-compare
+done
+python3 - <<'PY'
+import json
+from pathlib import Path
+rows = [json.loads(line) for line in Path('/evidence/comparison.jsonl').read_text().splitlines()]
+assert rows and all(row['equal'] for row in rows)
+print(f'PASS {len(rows)} same-source ARM1176 status/stdout/stderr comparisons')
+PY
