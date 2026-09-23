@@ -57,6 +57,9 @@ while [ "$#" -gt 0 ]; do
         -Wall) args+=(-fullwarn); translate '-Wall => -fullwarn' ;;
         -v) args+=(-show); translate '-v with input => -show, not version-only' ;;
         -mabi=n32) translate '-mabi=n32 => -n32' ;;
+        -mips3|-mips4)
+            [ "$argument" = "-$mipspro_isa" ] || reject 'ISA option conflicts with immutable profile'
+            translate "$argument => fixed qualified ISA" ;;
         -Wl,-r) merge=true; args+=(-Wl,-r) ;;
         -nostdlib) nostdlib=true; args+=("$argument") ;;
         -nodefaultlibs) nodefaultlibs=true; args+=("$argument") ;;
@@ -69,7 +72,7 @@ while [ "$#" -gt 0 ]; do
             args+=("$argument") ;;
         -Wl,-rpath,*|-Wl,-no_compact_rel) args+=("$argument") ;;
         -c|-S|-E) compile=true; args+=("$argument") ;;
-        -I*|-L*|-l*|-D*|-U*|-g|-w|-n32|-mips4) args+=("$argument") ;;
+        -I*|-L*|-l*|-D*|-U*|-g|-w|-n32) args+=("$argument") ;;
         -*) reject "unreviewed option $argument" ;;
         *.c|*.hc)
             source_indices+=("${#args[@]}")
@@ -159,7 +162,7 @@ if ! $compile; then
     args=("$support/crtbegin.o" "${args[@]}" "$support/libgcc.a"
           "$support/crtend.o" -Wl,-init,__do_global_ctors -Wl,-fini,__do_global_dtors)
 fi
-target=(-n32 -mips4 -r14000 -c99 -O2 -TARG:madd=OFF
+target=(-n32 "-$mipspro_isa" "-$mipspro_cpu" -c99 -O2 -TARG:madd=OFF
     -OPT:alias=ANY:fold_unsafe_relops=OFF:wrap_around_unsafe_opt=OFF:roundoff=0:IEEE_arithmetic=1:IEEE_NaN_inf=ON)
 printf '%q\n' "$compiler" "-I$consumer/ghc-headers" "${args[@]}" "${target[@]}" > "$attempt/output.args"
 # GHC 7.10's cc_filter uses break to find the next GCC include-stack header.

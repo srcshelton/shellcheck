@@ -89,6 +89,26 @@ for name in crtbegin.o crtend.o; do
 done
 bash "$adapter" -Wl,-r -nostdlib -nodefaultlibs -I headers one.o two.o -o "$fixture/merged without suffix"
 test "$(cat "$FAKE_ARGS")" = "$(printf '%s\n' -n32 -r one.o two.o -o "$fixture/merged without suffix")" || exit 1
+# Exercise the real shared policy and adapter, changing only native executable paths.
+for spec in r4k:mips3:r4000 r5k:mips4:r5000 r10k:mips4:r10000 r12k:mips4:r12000 r14k:mips4:r14000; do
+    variant=${spec%%:*}; rest=${spec#*:}; isa=${rest%%:*}; cpu=${rest#*:}
+    export IRIX_MIPSPRO_TARGET=$variant
+    variant_dir="$fixture/shellcheck-native-mipspro-$variant"
+    mkdir -p "$variant_dir/compiler-config" "$variant_dir/harness"
+    cp "$candidate/compiler-config/compiler.defaults" "$variant_dir/compiler-config/"
+    cp "$here/native-consumer-profile" "$here/mipspro-target-profile" "$variant_dir/harness/"
+    cp "$adapter" "$variant_dir/harness/native-mipspro-cc"
+    printf 'irix-%s-%s-n32-mipspro744m-ghc7103-O2-v1\n' "$isa" "$cpu" > "$variant_dir/build-profile"
+    bash "$variant_dir/harness/native-mipspro-cc" -c "-$isa" "$fixture/input space.c"
+    grep -Fx -- "-$isa" "$FAKE_ARGS" >/dev/null || exit 1
+    grep -Fx -- "-$cpu" "$FAKE_ARGS" >/dev/null || exit 1
+    test "$(grep -Ec '^-(r[0-9]+|mips[34])$' "$FAKE_ARGS")" = 2 || exit 1
+    other=mips3; if [ "$isa" = mips3 ]; then other=mips4; fi
+    status=0
+    bash "$variant_dir/harness/native-mipspro-cc" -c "-$other" "$fixture/input space.c" >/dev/null 2>&1 || status=$?
+    test "$status" = 2 || exit 1
+done
+unset IRIX_MIPSPRO_TARGET
 mv "$runtime" "$runtime.saved"
 status=0
 bash "$adapter" one.o -o output >/dev/null 2>&1 || status=$?

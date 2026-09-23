@@ -24,12 +24,52 @@ relocatable toolchain, a ShellCheck-specific consumer workflow should:
 
 Processor-specific builds must use matching dependency objects and be validated
 on suitable hardware or an emulator. The IP22 worker cannot validate MIPS IV
-execution. MIPSpro 7.4.4m has built an optimised native Fuel candidate with all
-36 private dependencies and focused runtime gates. Full source-matched corpus
-equivalence, relocatable packaging and an emulator CI build are separate gates;
+execution. Native compiler qualification, source-matched corpus comparison,
+relocatable
+packaging and emulator CI are separate gates;
 the existence of the dialect profiles alone implies none of these results.
 
 ## Private GHC 7.10.3 consumer build
+
+### Processor-specific MIPSpro candidates
+
+Set `IRIX_CONSUMER_PROFILE=mipspro` and explicitly select
+`IRIX_MIPSPRO_TARGET=r4k|r5k|r10k|r12k|r14k`. The shared
+`mipspro-target-profile` policy selects N32/O2 with MIPS III/R4000 or
+MIPS IV/R5000, R10000, R12000 or R14000 respectively. The conservative alias,
+wraparound and floating-point controls remain unchanged. Conflicting ISA or
+unreviewed compiler options fail rather than overriding the chosen target.
+
+Each uses `shellcheck-native-mipspro-TARGET` and
+`shellcheck-native-selection-TARGET`, with its own sources, dependency objects,
+package DB, logs and immutable receipt. Explicit `--select mipspro` / `--check
+mipspro` are required: `auto`, GCC fallback and historical one-time repair
+operations are not permitted. The target policy joins the five-suite input
+manifest, so changing target options invalidates qualification. Do not copy a
+Fuel qualification receipt or completed dependency tree into another target.
+
+Stage fresh pinned package sources, current ShellCheck source, private headers,
+defaults and support files just as for the original consumer. Obtain the actual
+five-suite, dependency-C/FFI and hsc2hs gates for that target before selecting and
+running `build-native-selected mipspro`. Bootstrap compilers/RTS are shared and
+unchanged. In particular, R4k release qualification must inspect **all linked
+seed/support/dependency objects** for MIPS III compatibility; compiler flags on
+ShellCheck alone cannot lower a MIPS IV library's ISA. CPU-specific execution
+and final-binary metadata are release gates, not inferred from host mock tests.
+
+Leaving `IRIX_MIPSPRO_TARGET` unset retains the historical Fuel profile and paths.
+Do not redeploy changed adapters over a sealed historical build. The host
+selection/adapter tests cover all five policies, receipt isolation and rejection.
+Use only a small representative old/new timing sample after semantic gates;
+no broad benchmark campaign is required.
+
+`qualify-irix-worker.yml` is a manual, native-AMD64 capability preflight for the
+pinned licensed worker. It records actual emulator build features and refuses
+to mistake graphics `rex-jit` for MIPS CPU JIT. It exports text evidence only,
+not proprietary payloads. The current IP22 worker is MIPS III, not a MIPS IV
+variant test host. This preflight does not complete the producer's later ladder,
+fresh-checkpoint restore, longest-unit timeout or relocatable-toolchain gates;
+until those pass there is deliberately no nominally runnable full consumer job.
 
 The experimental native consumer harness uses a validated GHC 7.10.3 tree at
 `$IRIX_RUN_ROOT/ghc-7.10.3` (default root:

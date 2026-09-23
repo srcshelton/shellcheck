@@ -1,0 +1,16 @@
+# Sourced target policy, shared by the adapters and immutable selection driver.
+# Never infer this from the machine that happens to compile the program.
+# shellcheck shell=bash
+# shellcheck disable=SC2034 # Outputs consumed by the caller.
+mipspro_target_profile() {
+    case "$1" in
+        r4k) mipspro_isa=mips3; mipspro_cpu=r4000 ;;
+        r5k) mipspro_isa=mips4; mipspro_cpu=r5000 ;;
+        r10k) mipspro_isa=mips4; mipspro_cpu=r10000 ;;
+        r12k) mipspro_isa=mips4; mipspro_cpu=r12000 ;;
+        r14k) mipspro_isa=mips4; mipspro_cpu=r14000 ;;
+        *) echo 'Expected IRIX_MIPSPRO_TARGET=r4k|r5k|r10k|r12k|r14k' >&2; return 2 ;;
+    esac
+    consumer="$run_root/shellcheck-native-mipspro-$1"
+    expected_profile="irix-$mipspro_isa-$mipspro_cpu-n32-mipspro744m-ghc7103-O2-v1"
+}

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Read only the emulator's public capability output; never export a worker image.
+set -euo pipefail
+out=${1:?Usage: ci-worker-preflight NEW_OUTPUT_DIRECTORY}
+image=${IRIX_WORKER_IMAGE:?Set a licensed digest-pinned IRIX worker image}
+[[ "$image" =~ ^[a-zA-Z0-9._:/-]+@sha256:[a-f0-9]{64}$ ]] || {
+    echo 'Worker must have a complete immutable SHA-256 digest' >&2; exit 2;
+}
+test "$(uname -m)" = x86_64 || { echo 'Use a native AMD64 hosted runner' >&2; exit 2; }
+mkdir "$out"
+finish() { printf '%s\n' "$?" > "$out/status"; }
+trap finish EXIT
+printf '%s\n' "$image" > "$out/worker-image.txt"
+date -u +%FT%TZ > "$out/started"
+docker pull --platform linux/amd64 "$image"
+docker image inspect "$image" --format '{{.Id}} {{.Architecture}}' > "$out/image-identity.txt"
+docker run --rm --platform linux/amd64 --network none --entrypoint /opt/iris/iris \
+    "$image" --version > "$out/emulator-version.txt" 2>&1
+cat "$out/emulator-version.txt"
+# rex-jit is a graphics accelerator and is deliberately NOT accepted as CPU JIT.
+if ! grep -E 'build features:.*(^|[ ,])(jit|jitv2)([ ,]|$)' "$out/emulator-version.txt" >/dev/null; then
+    echo 'BLOCKED: this image has no reported MIPS CPU JIT; do not launch the long ladder on an assumed JIT worker.' | tee "$out/decision.txt"
+    exit 1
+fi
+printf '%s\n' 'CPU JIT is compiled in, but this is NOT runtime, ISA, memory, MIPSpro or checkpoint qualification.' \
+    'Next: verify enabled JIT against interpreter, target ISA and licensed MIPSpro; restore and time representative and longest units before ladder/consumer dispatch.' \
+    > "$out/decision.txt"
+cat "$out/decision.txt"

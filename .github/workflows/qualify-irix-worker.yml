@@ -1,0 +1,32 @@
+name: Qualify IRIX CI worker capabilities
+
+on:
+  workflow_dispatch:
+    inputs:
+      worker_image:
+        description: Licensed worker reference pinned with @sha256 (never uploaded)
+        type: string
+        required: true
+        default: ghcr.io/sgidevnet/irix-worker@sha256:6be7c6c3f92d15705f2d08a3d1b919d6f6241b5364ced22ae0d962820e4724cd
+
+permissions:
+  contents: read
+
+jobs:
+  capabilities:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+      - name: Inspect actual worker, not configuration labels
+        env:
+          IRIX_WORKER_IMAGE: ${{ inputs.worker_image }}
+        run: bash builders/irix/ci-worker-preflight evidence
+      - name: Preserve open text capability evidence only
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: irix-worker-capabilities-${{ github.run_id }}-${{ github.run_attempt }}
+          path: evidence/
+          if-no-files-found: error
+          retention-days: 30

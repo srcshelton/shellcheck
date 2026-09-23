@@ -278,3 +278,20 @@ reject selection_main --check auto
 printf 'changed\n' >> "$fixture/shellcheck-native-selection/selected/files.cksum"
 reject selection_main --check auto
 echo 'PASS compiler selection preference, capability failures, immutable inputs, explicit lowerer and two-input layout/transport revisions, preserved package inventory, unchanged parent receipts, no stale/live gates or post-selection fallback (mock contracts only)'
+for target in r4k r5k r10k r12k r14k; do
+    export IRIX_MIPSPRO_TARGET=$target
+    fixture_profile mipspro
+    [ "$consumer" = "$run_root/shellcheck-native-mipspro-$target" ] || fail 'variant directory'
+    reject selection_main --select auto
+    reject selection_main --select gcc
+    reject selection_main --requalify-lowerer mipspro
+    reject selection_main --requalify-layout-transport mipspro
+    selection_main --select mipspro >/dev/null || fail 'variant selection'
+    selection_main --check mipspro >/dev/null || fail 'variant receipt'
+    [ -d "$run_root/shellcheck-native-selection-$target/selected" ] || fail 'variant receipt directory'
+    printf 'changed target policy\n' >> "$consumer/harness/mipspro-target-profile"
+    reject selection_main --check mipspro
+done
+export IRIX_MIPSPRO_TARGET=unrecognised
+reject selection_main --select mipspro
+echo 'PASS isolated processor profiles, explicit-only selection, sealed target policy and no historical repair reuse (mock contracts only)'

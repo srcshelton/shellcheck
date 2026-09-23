@@ -8,8 +8,13 @@ selection_profile() {
         mipspro)
             profile=mipspro
             consumer="$run_root/shellcheck-native-mipspro"
-            expected_profile=fuel-mips4-r14000-n32-mipspro744m-ghc7103-O2-v1 ;;
+            expected_profile=fuel-mips4-r14000-n32-mipspro744m-ghc7103-O2-v1
+            if [ -n "${IRIX_MIPSPRO_TARGET-}" ]; then
+                source "$(dirname "${BASH_SOURCE[0]}")/mipspro-target-profile"
+                mipspro_target_profile "$IRIX_MIPSPRO_TARGET" || return "$?"
+            fi ;;
         gcc)
+            [ -z "${IRIX_MIPSPRO_TARGET-}" ] || return 2
             profile=optimized
             consumer="$run_root/shellcheck-native-optimized"
             expected_profile=fuel-mips4-generic-n32-gcc346-ghc7103-O2-v2 ;;
@@ -67,6 +72,7 @@ selection_gate_inputs() {
     printf '%s\n' native-consumer-profile native-shellcheck-cc native-shellcheck-link build-native-optimized
     if [ "$selected" = mipspro ]; then
         printf '%s\n' native-mipspro-cc ghc710-mipspro-hc
+        if [ -n "${IRIX_MIPSPRO_TARGET-}" ]; then printf '%s\n' mipspro-target-profile; fi
     fi
 }
 
@@ -449,6 +455,12 @@ selection_main() {
     case "$run_root" in *[[:space:]]*|*'/../'*|*'/./'*) return 2 ;; esac
     case "$requested" in auto|mipspro|gcc) ;; *) return 2 ;; esac
     control="$run_root/shellcheck-native-selection"
+    if [ -n "${IRIX_MIPSPRO_TARGET-}" ]; then
+        [ "$requested" = mipspro ] || { selection_error 'variants require explicit mipspro, not auto/gcc'; return 2; }
+        case "$mode" in --select|--check) ;; *) selection_error 'historical repair operations do not apply to new variants'; return 2 ;; esac
+        selection_profile mipspro || return "$?"
+        control="$run_root/shellcheck-native-selection-$IRIX_MIPSPRO_TARGET"
+    fi
     sealed="$control/selected"
     case "$mode" in
         --check) selection_verify_current "$sealed" "$requested"; return "$?" ;;

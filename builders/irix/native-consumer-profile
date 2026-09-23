@@ -4,6 +4,10 @@
 # shellcheck disable=SC2034 # Shared configuration is consumed by the sourcing driver.
 run_root=${IRIX_RUN_ROOT-/var/tmp/haskell-ghc-irix-experiment}
 profile=${IRIX_CONSUMER_PROFILE-functional}
+if [ -n "${IRIX_MIPSPRO_TARGET-}" ] && [ "$profile" != mipspro ]; then
+    echo 'Processor variants require explicit MIPSpro selection' >&2
+    exit 2
+fi
 case "$profile" in
     functional)
         consumer="$run_root/shellcheck-native"
@@ -21,6 +25,12 @@ case "$profile" in
             mipspro)
                 consumer="$run_root/shellcheck-native-mipspro"
                 expected_profile='fuel-mips4-r14000-n32-mipspro744m-ghc7103-O2-v1'
+                mipspro_isa=mips4
+                mipspro_cpu=r14000
+                if [ -n "${IRIX_MIPSPRO_TARGET-}" ]; then
+                    source "$(dirname "${BASH_SOURCE[0]}")/mipspro-target-profile"
+                    mipspro_target_profile "$IRIX_MIPSPRO_TARGET" || exit "$?"
+                fi
                 ;;
         esac
         job="$consumer/job"
