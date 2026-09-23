@@ -1,0 +1,31 @@
+#!/bin/sh
+# Actual LLVM/GCC/ARM1176 regression; run in the AMD64 builder environment.
+# Usage: sh test-llvm-assembler RECIPE_DIRECTORY NEW_OUTPUT_DIRECTORY
+set -eu
+recipe=$1
+out=$2
+target=armv6-unknown-linux-gnueabihf
+mkdir "$out"
+cd "$out"
+llc-19 -mtriple="$target" -mcpu=arm1176jzf-s -mattr=+vfp2 \
+    -filetype=asm "$recipe/llvm-assembler-probe.ll" -o llvm.s
+if /usr/bin/clang-19 -x assembler -c llvm.s -o wrong.o > wrong.log 2>&1; then
+    echo 'FAIL: untargeted AMD64 Clang unexpectedly accepted ARM assembly' >&2
+    exit 1
+fi
+grep -Eq 'unknown directive|invalid instruction mnemonic' wrong.log
+sh "$recipe/armv6-llvm-as" -x assembler -c llvm.s -o llvm.o
+/usr/bin/clang-19 --target="$target" -x assembler -c llvm.s -o direct.o
+cmp llvm.o direct.o
+"$target-gcc" -O2 -static -fuse-ld=lld \
+    "$recipe/llvm-assembler-probe.c" llvm.o -o llvm-probe
+python3 "$recipe/validate-elf" llvm-probe
+qemu-arm-static -cpu arm1176 ./llvm-probe
+echo 'PASS LLVM-generated ARM assembly, target wrapper and ARM1176 execution'
+
+"$target-gcc" -O2 -S "$recipe/abi-probe.c" -o abi.s
+sh "$recipe/armv6-llvm-as" -x assembler -c abi.s -o abi.o
+"$target-gcc" -static -fuse-ld=lld abi.o -o abi-probe
+python3 "$recipe/validate-elf" abi-probe
+qemu-arm-static -cpu arm1176 ./abi-probe
+echo 'PASS target LLVM assembler preserves hard-float and 64-bit ABI'

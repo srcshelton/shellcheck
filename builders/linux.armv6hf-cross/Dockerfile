@@ -55,11 +55,10 @@ RUN cabal update \
     && cabal --project-file=/ghc/hadrian/cabal.project new-build \
        --with-compiler=ghc --disable-documentation --disable-profiling \
        --disable-library-profiling -j2 --dry-run exe:hadrian
-RUN ./boot.source \
-    && CC="$TARGET-gcc" CXX="$TARGET-g++" CC_STAGE0=gcc CXX_STAGE0=g++ \
-       LLC=llc-19 OPT=opt-19 LLVMAS=clang-19 \
-       ./configure --build=x86_64-linux-gnu --host=x86_64-linux-gnu --target="$TARGET" --with-system-libffi=no \
-    && ./hadrian/build --flavour=quickest --bignum=native -j2 --prefix=/usr/local install
+# GHC 9.12 does not add its target triple when invoking LLVMAS.
+COPY armv6-llvm-as build-ghc /usr/local/bin/
+RUN chmod +x /usr/local/bin/armv6-llvm-as /usr/local/bin/build-ghc
+RUN /usr/local/bin/build-ghc
 COPY AbiProbe.hs /qualification/AbiProbe.hs
 RUN "$TARGET-ghc" -O2 -static -optl-static -v /qualification/AbiProbe.hs \
        /qualification/abi-probe.c -optc-DHASKELL_FFI -o /qualification/hs-abi-probe \

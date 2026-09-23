@@ -1,0 +1,4 @@
+#!/bin/sh
+# GHC 9.12 stores LLVMAS as an executable without target arguments.
+# GCC knows its configured target; the separately invoked Clang does not.
+exec /usr/bin/clang-19 --target=armv6-unknown-linux-gnueabihf "$@"

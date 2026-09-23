@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+cd /ghc
+target=armv6-unknown-linux-gnueabihf
+./boot.source
+CC="$target-gcc" CXX="$target-g++" CC_STAGE0=gcc CXX_STAGE0=g++ \
+    LLC=llc-19 OPT=opt-19 LLVMAS=/usr/local/bin/armv6-llvm-as \
+    ./configure --build=x86_64-linux-gnu --host=x86_64-linux-gnu \
+        --target="$target" --with-system-libffi=no
+./hadrian/build --flavour=quickest --bignum=native -j2 \
+    --prefix=/usr/local install
