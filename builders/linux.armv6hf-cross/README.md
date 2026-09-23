@@ -1,6 +1,7 @@
 # Experimental native-host ARMv6 builder
 
-NOT qualified and NOT selected by any release workflow. There is deliberately
+Locally runtime/CLI-qualified, but NOT release-qualified or selected by any
+release workflow. There is deliberately
 no `tag` file: the standard build/run helpers cannot select this accidentally.
 The existing linux.armv6hf builder remains the release path.
 
