@@ -59,8 +59,9 @@ RUN cabal update \
        --with-compiler=ghc --disable-documentation --disable-profiling \
        --disable-library-profiling -j2 --dry-run exe:hadrian
 # GHC 9.12 does not add its target triple when invoking LLVMAS.
-COPY armv6-llvm-as build-ghc /usr/local/bin/
-RUN chmod +x /usr/local/bin/armv6-llvm-as /usr/local/bin/build-ghc
+COPY armv6-llvm-as build-ghc install-ghc validate-host-tools /usr/local/bin/
+RUN chmod +x /usr/local/bin/armv6-llvm-as /usr/local/bin/build-ghc \
+    /usr/local/bin/install-ghc /usr/local/bin/validate-host-tools
 RUN /usr/local/bin/build-ghc
 COPY AbiProbe.hs /qualification/AbiProbe.hs
 RUN "$TARGET-ghc" -O2 -static -optl-static -v /qualification/AbiProbe.hs \

@@ -1,0 +1,29 @@
+#!/usr/bin/env python3
+"""Require actual x86-64 host tools and the intended ARMv6 cross settings."""
+import ast
+from pathlib import Path
+import subprocess
+
+target = 'armv6-unknown-linux-gnueabihf'
+root = Path('/usr/local/lib') / (target + '-ghc-9.12.2')
+for tool in ['ghc', 'ghc-pkg', 'hsc2hs', 'hp2ps', 'unlit']:
+    binary = root / 'bin' / (target + '-' + tool)
+    with binary.open('rb') as stream:
+        header = stream.read(20)
+    assert header[:6] == b'\x7fELF\x02\x01', (binary, 'not ELF64 little-endian')
+    assert int.from_bytes(header[18:20], 'little') == 62, (binary, 'not x86-64')
+settings = dict(ast.literal_eval((root / 'lib/settings').read_text()))
+for key, expected in {
+    'cross compiling': 'YES',
+    'target arch': 'ArchARM ARMv6 [VFPv2] HARD',
+    'target word size': '4',
+    'target word big endian': 'NO',
+    'C compiler command': target + '-gcc',
+    'ranlib command': target + '-ranlib',
+    'LLVM target': target,
+    'LLVM llvm-as command': '/usr/local/bin/armv6-llvm-as',
+}.items():
+    assert settings.get(key) == expected, (key, settings.get(key), expected)
+version = subprocess.check_output([target + '-ghc', '--numeric-version'], text=True).strip()
+assert version == '9.12.2', version
+print('PASS x86-64 GHC/package/helper tools and ARMv6/VFPv2/hard-float cross settings')

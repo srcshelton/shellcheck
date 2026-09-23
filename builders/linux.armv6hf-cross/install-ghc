@@ -1,0 +1,12 @@
+#!/bin/sh
+# Hadrian 9.12's install rule passes only --prefix to the bindist configure.
+# Keep cross host/target and tool selection explicit at this second configure.
+set -eu
+target=armv6-unknown-linux-gnueabihf
+cd "/ghc/_build/bindist/ghc-9.12.2-$target"
+CC="$target-gcc" CXX="$target-g++" RANLIB="$target-ranlib" \
+    LLC=llc-19 OPT=opt-19 LLVMAS=/usr/local/bin/armv6-llvm-as \
+    sh configure --prefix=/usr/local --build=x86_64-linux-gnu \
+        --host=x86_64-linux-gnu --target="$target"
+make install
+exec /usr/local/bin/validate-host-tools
