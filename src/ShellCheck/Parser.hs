@@ -3161,6 +3161,9 @@ prop_readAssignmentWord9 = isOk readAssignmentWord "IFS= "
 prop_readAssignmentWord9a = isOk readAssignmentWord "foo="
 prop_readAssignmentWord9b = isOk readAssignmentWord "foo=  "
 prop_readAssignmentWord9c = isOk readAssignmentWord "foo=  #bar"
+prop_readAssignmentWordsEmpty = isOk readScript "nospool= dopt= fil= spool= dit=\n"
+prop_readAssignmentWordsEmptyAppend = isOk readScript "first= second+= third=last\n"
+prop_readAssignmentWordSpaceBeforeValue = isWarning readScript "first= value\n"
 prop_readAssignmentWord11 = isOk readAssignmentWord "foo=([a]=b [c] [d]= [e f )"
 prop_readAssignmentWord12 = isOk readAssignmentWord "a[b <<= 3 + c]='thing'"
 prop_readAssignmentWord13 = isOk readAssignmentWord "var=( (1 2) (3 4) )"
@@ -3204,9 +3207,17 @@ readAssignmentWordExt lenient = called "variable assignment" $ do
     rightPosEnd <- getPosition
     isEndOfCommand <- fmap isJust $ optionMaybe (try . lookAhead $ (void (oneOf "\r\n;&|)") <|> eof))
 
+    -- The next assignment is a separate command-prefix word, not a value
+    -- accidentally separated from this one by whitespace.
+    nextIsAssignment <- if hasRightSpace && not isEndOfCommand
+        then isFollowedBy $ do
+            _ <- readVariableName
+            void $ try (string "+=") <|> string "="
+        else return False
+
     if hasRightSpace || isEndOfCommand
       then do
-        when (variable /= "IFS" && hasRightSpace && not isEndOfCommand) $ do
+        when (variable /= "IFS" && hasRightSpace && not isEndOfCommand && not nextIsAssignment) $ do
             parseProblemAtWithEnd rightPosStart rightPosEnd WarningC 1007
                 "Remove space after = if trying to assign a value (for empty string, use var='' ... )."
         value <- readEmptyLiteral

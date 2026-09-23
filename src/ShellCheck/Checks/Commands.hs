@@ -660,30 +660,48 @@ prop_checkNonportableSignals4 = verify checkNonportableSignals "trap f SIGKILL"
 prop_checkNonportableSignals5 = verify checkNonportableSignals "trap f 9"
 prop_checkNonportableSignals6 = verify checkNonportableSignals "trap f stop"
 prop_checkNonportableSignals7 = verifyNot checkNonportableSignals "trap 'stop' int"
+prop_checkNonportableSignalsIrixSh = verifyNot checkNonportableSignals "# shellcheck shell=irix-sh\ntrap f 8"
+prop_checkNonportableSignalsIrixKsh = verifyNot checkNonportableSignals "# shellcheck shell=irix-ksh\ntrap f 17"
+prop_checkNonportableSignalsIrixCde = verifyNot checkNonportableSignals
+    "# shellcheck shell=irix-sh\ntrap bailout 1 2 3 4 5 6 7 8 10 12 13 14 15 16 17"
+prop_checkNonportableSignalsIrixBsh = verify checkNonportableSignals "# shellcheck shell=irix-bsh\ntrap f 8"
+prop_checkNonportableSignalsIrixUntrappable = verifyMessage checkNonportableSignals 2173
+    "SIGKILL/SIGSTOP can not be trapped." "# shellcheck shell=irix-sh\ntrap f 9"
+prop_checkNonportableSignalsIrixStop = verifyMessage checkNonportableSignals 2173
+    "SIGKILL/SIGSTOP can not be trapped." "# shellcheck shell=irix-sh\ntrap f 23"
+prop_checkNonportableSignalsIrixUnknown = verify checkNonportableSignals "# shellcheck shell=irix-sh\ntrap f 99"
+prop_checkNonportableSignalsIrixLeadingZero = verify checkNonportableSignals "# shellcheck shell=irix-sh\ntrap f 08"
+prop_checkNonportableSignalsOtherShell = verify checkNonportableSignals "# shellcheck shell=sh\ntrap f 23"
 checkNonportableSignals = CommandCheck (Exactly "trap") (f . arguments)
   where
-    f args = case args of
-        first:rest | not $ isFlag first -> mapM_ check rest
-        _ -> return ()
+    f args = do
+        shell <- asks shellType
+        case args of
+            first:rest | not $ isFlag first -> mapM_ (check shell) rest
+            _ -> return ()
 
-    check param = sequence_ $ do
+    check shell param = sequence_ $ do
         str <- getLiteralString param
         let id = getId param
         return $ sequence_ $ mapMaybe (\f -> f id str) [
-            checkNumeric,
-            checkUntrappable
+            checkNumeric shell,
+            checkUntrappable shell
             ]
 
-    checkNumeric id str = do
+    checkNumeric shell id str = do
         guard $ not (null str)
         guard $ all isDigit str
         guard $ str /= "0" -- POSIX exit trap
         guard $ str `notElem` ["1", "2", "3", "6", "9", "14", "15" ] -- XSI
+        -- The traditional IRIX signal numbers are fixed by sys/signal.h.
+        -- Keep warning for unknown numbers and noncanonical spellings.
+        guard $ not (shell `elem` [IrixSh, IrixKsh] && str `elem` map show [1..31 :: Int])
         return $ warn id 2172
             "Trapping signals by number is not well defined. Prefer signal names."
 
-    checkUntrappable id str = do
-        guard $ map toLower str `elem` ["kill", "9", "sigkill", "stop", "sigstop"]
+    checkUntrappable shell id str = do
+        guard $ map toLower str `elem` (["kill", "9", "sigkill", "stop", "sigstop"] ++
+            ["23" | isIrixPlatformShell shell])
         return $ err id 2173
             "SIGKILL/SIGSTOP can not be trapped."
 

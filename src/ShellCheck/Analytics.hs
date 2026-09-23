@@ -2027,6 +2027,10 @@ prop_checkConditionalAndOrs2 = verify checkConditionalAndOrs "[[ foo -o bar ]]"
 prop_checkConditionalAndOrs3 = verifyNot checkConditionalAndOrs "[[ foo || bar ]]"
 prop_checkConditionalAndOrs4 = verify checkConditionalAndOrs "[ foo -a bar ]"
 prop_checkConditionalAndOrs5 = verify checkConditionalAndOrs "[ -z 3 -o a = b ]"
+-- IRIX accepts these operators, but test's argument-count and precedence
+-- ambiguities still make this portability warning useful.
+prop_checkConditionalAndOrsIrixSh = verify checkConditionalAndOrs "# shellcheck shell=irix-sh\n[ -n \"$a\" -a -n \"$b\" ]"
+prop_checkConditionalAndOrsIrixKsh = verify checkConditionalAndOrs "# shellcheck shell=irix-ksh\n[ -n \"$a\" -o -n \"$b\" ]"
 checkConditionalAndOrs _ t =
     case t of
         (TC_And id SingleBracket "&&" _ _) ->

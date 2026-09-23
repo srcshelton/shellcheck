@@ -4,6 +4,18 @@ These checks analyse shell source without executing or modifying it. The
 following boundaries explain when a diagnostic applies and when the analysis
 declines to infer runtime behaviour. Silence is not proof that a script is safe.
 
+## IRIX test operators and numeric traps
+
+SC2166 remains active for `test`/`[` with `-a` or `-o` under the IRIX profiles.
+Those operators are accepted by IRIX, but combined tests can still depend on
+argument-count and precedence rules; separate tests retain clearer behaviour.
+
+SC2172 does not warn for canonical decimal signal numbers 1–31 under
+`irix-sh` and `irix-ksh`, whose traditional signal assignments are defined by
+IRIX. Other numbers and spellings still receive the portability warning.
+SC2173 continues to reject numeric SIGKILL (9) and also rejects IRIX's
+numeric SIGSTOP (23). This does not infer that a signal handler will run.
+
 ## SC2030 / SC2031: separate local bindings
 
 The legacy subshell-assignment check now distinguishes a function's explicitly
