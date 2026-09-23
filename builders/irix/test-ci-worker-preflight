@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Mock capability-discovery contracts, not emulator/runtime qualification.
+set -euo pipefail
+here=$(cd "$(dirname "$0")" && pwd)
+parent=${IRIX_TEST_PARENT:?Set a durable test parent}
+fixture=$(mktemp -d "$parent/worker-preflight.XXXXXXXX")
+trap 'rm -rf "$fixture"' EXIT
+mkdir "$fixture/bin"
+printf '#!/bin/sh\necho x86_64\n' > "$fixture/bin/uname"
+cat > "$fixture/bin/docker" <<'MOCK'
+#!/bin/sh
+case "$1" in
+    pull) exit 0 ;;
+    image) echo 'sha256:mock amd64' ;;
+    run) printf 'iris: build features: %s\n' "$MOCK_FEATURES" ;;
+    *) exit 99 ;;
+esac
+MOCK
+chmod +x "$fixture/bin/uname" "$fixture/bin/docker"
+export PATH="$fixture/bin:$PATH"
+export IRIX_WORKER_IMAGE=example.invalid/worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+for spec in 'rex-jit lightning tlbvmap chd:1' 'jit rex-jit chd:0' 'jitv2 chd:0' 'notjit rex-jit:1'; do
+    features=${spec%:*}; expected=${spec##*:}
+    result=0
+    MOCK_FEATURES="$features" bash "$here/ci-worker-preflight" "$fixture/result" > "$fixture/log" 2>&1 || result=$?
+    test "$result" = "$expected"
+    test "$(cat "$fixture/result/status")" = "$expected"
+    rm -r "$fixture/result"
+done
+result=0
+IRIX_WORKER_IMAGE=unqualified:latest bash "$here/ci-worker-preflight" "$fixture/invalid" >/dev/null 2>&1 || result=$?
+test "$result" = 2
+test ! -e "$fixture/invalid"
+echo 'PASS CPU JIT versus graphics JIT, digest guard and real failure status (mock contracts only)'

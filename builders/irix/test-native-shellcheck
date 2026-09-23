@@ -57,7 +57,7 @@ grep -F -- '--flags=irix-legacy-ghc' "$FAKE_CALLS" >/dev/null
 grep -F -- '--disable-library-stripping' "$FAKE_CALLS" >/dev/null
 grep -F -- '--ghc-option=-O0' "$FAKE_CALLS" >/dev/null
 grep -F -- "--ghc-option=-pgml --ghc-option=$consumer/harness/native-shellcheck-link" "$FAKE_CALLS" >/dev/null
-for dialect in irix-sh irix-ksh irix-dtksh; do
+for dialect in irix-sh irix-ksh irix-bsh irix-jsh irix-dtksh; do
     grep -F -- "--norc --shell=$dialect --format=json1" "$FAKE_CALLS" >/dev/null
 done
 for stage in configure build version clean diagnostic crash function-pipeline function-forward; do
@@ -118,4 +118,4 @@ IRIX_CONSUMER_PROFILE=optimized bash "$here/build-native-shellcheck" > "$test_di
 [[ $(cat "$test_dir/job/guest-status") == 5 ]]
 grep -F -- "--enable-optimization=2 --ghc-option=-O2 --with-gcc=$optimized/harness/native-shellcheck-cc" "$FAKE_CALLS" >/dev/null
 grep -F -- "--ghc-option=-pgma --ghc-option=$optimized/harness/native-shellcheck-cc" "$FAKE_CALLS" >/dev/null
-echo 'PASS private build, pinned dependencies, consumer linker isolation, all three IRIX smoke profiles and no READY after build/runtime/registration failures'
+echo 'PASS private build, pinned dependencies, consumer linker isolation, all five IRIX smoke profiles and no READY after build/runtime/registration failures'

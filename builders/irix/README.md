@@ -143,8 +143,8 @@ This first functional build uses `-O0` and disables executable/library
 stripping. Cabal's default archive stripping assumes GNU `strip` options that
 IRIX `strip` does not implement. Release executable stripping and processor
 optimisation are separate qualification steps, not abandoned requirements.
-The shellcheck phase enables only `irix-legacy-ghc`, checks all three IRIX
-`sh`, `ksh`, and `dtksh` profiles with clean and SC2086-producing inputs, and
+The shellcheck phase enables only `irix-legacy-ghc`, checks all five IRIX
+`sh`, `ksh`, `bsh`, `jsh` and `dtksh` profiles with clean and SC2086-producing inputs, and
 publishes a private `bin/shellcheck`
 plus `native-ready` only after the native runtime gates pass. It is not a
 release or a completed native/macOS equivalence result.
